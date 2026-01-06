@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         "http://localhost:4200",
         "https://bbscout.me",
         "https://www.bbscout.me",
+        "https://mellow-truffle-30faa7.netlify.app",
     ]
 
     class Config:
