@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     # CORS - include both local and production origins
     cors_origins: list[str] = [
         "http://localhost:4200",
-        "https://buzzer-beater.netlify.app",  # Update with your actual Netlify domain
+        "https://bbscout.me",
+        "https://www.bbscout.me",
     ]
 
     class Config:
