@@ -16,8 +16,13 @@ from app.models import User, Team, Player, PlayerShare
 
 config = context.config
 
+# Convert MySQL URL to aiomysql format
+database_url = os.getenv("DATABASE_URL", "")
+if database_url.startswith("mysql://"):
+    database_url = "mysql+aiomysql://" + database_url[8:]
+
 # Set sqlalchemy.url from environment
-config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", ""))
+config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
