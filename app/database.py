@@ -4,9 +4,14 @@ from app.config import get_settings
 
 settings = get_settings()
 
+# Convert Railway's MySQL URL to aiomysql format
+database_url = settings.database_url
+if database_url.startswith("mysql://"):
+    database_url = database_url.replace("mysql://", "mysql+aiomysql://", 1)
+
 # Create engine - works with both MySQL and PostgreSQL
 engine = create_async_engine(
-    settings.database_url,
+    database_url,
     echo=True,
     pool_pre_ping=True,  # Reconnect on stale connections
 )
