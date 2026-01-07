@@ -98,7 +98,7 @@ async def get_received_shares(
     stmt = (
         select(PlayerShare)
         .options(
-            selectinload(PlayerShare.player),
+            selectinload(PlayerShare.player).selectinload(Player.current_team),
             selectinload(PlayerShare.owner),
         )
         .where(PlayerShare.recipient_id == current_user.id)
@@ -114,7 +114,7 @@ async def get_received_shares(
                 player_id=share.player.player_id,
                 name=share.player.name,
                 age=share.player.age,
-                potential=share.player.potential,
+                potential=share.player.potential or 0,
                 best_position=share.player.best_position,
                 jump_shot=share.player.jump_shot,
                 jump_range=share.player.jump_range,
@@ -131,10 +131,11 @@ async def get_received_shares(
                 experience=share.player.experience,
             ),
             owner_username=share.owner.username,
-            owner_name=share.owner.name,
-            owner_team_name=None,
+            owner_name=share.owner.username,
+            owner_team_name=share.player.current_team.name if share.player.current_team else None,
+            owner_team_id=share.player.current_team.team_id if share.player.current_team else None,
             recipient_username=current_user.username,
-            recipient_name=current_user.name,
+            recipient_name=current_user.username,
             shared_at=share.created_at
         )
         for share in shares
@@ -152,7 +153,7 @@ async def get_sent_shares(
     stmt = (
         select(PlayerShare)
         .options(
-            selectinload(PlayerShare.player),
+            selectinload(PlayerShare.player).selectinload(Player.current_team),
             selectinload(PlayerShare.recipient),
         )
         .where(PlayerShare.owner_id == current_user.id)
@@ -168,7 +169,7 @@ async def get_sent_shares(
                 player_id=share.player.player_id,
                 name=share.player.name,
                 age=share.player.age,
-                potential=share.player.potential,
+                potential=share.player.potential or 0,
                 best_position=share.player.best_position,
                 jump_shot=share.player.jump_shot,
                 jump_range=share.player.jump_range,
@@ -185,10 +186,11 @@ async def get_sent_shares(
                 experience=share.player.experience,
             ),
             owner_username=current_user.username,
-            owner_name=current_user.name,
-            owner_team_name=None,
+            owner_name=current_user.username,
+            owner_team_name=share.player.current_team.name if share.player.current_team else None,
+            owner_team_id=share.player.current_team.team_id if share.player.current_team else None,
             recipient_username=share.recipient.username,
-            recipient_name=share.recipient.name,
+            recipient_name=share.recipient.username,
             shared_at=share.created_at
         )
         for share in shares
