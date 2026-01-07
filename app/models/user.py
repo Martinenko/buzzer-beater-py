@@ -13,6 +13,7 @@ class User(Base):
     bb_key = Column(String(255), nullable=True)  # BuzzerBeater API key
     name = Column(String(100), nullable=True)
     supporter = Column(Boolean, default=False)
+    auto_sync_enabled = Column(Boolean, default=False)  # Enable automatic weekly roster sync
 
     # Relationships
     teams = relationship("Team", back_populates="coach")

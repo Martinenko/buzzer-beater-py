@@ -123,13 +123,16 @@ async def sync_roster_for_team(user: User, team: Team, db: AsyncSession) -> int:
 
 
 async def sync_all_rosters():
-    """Sync rosters for all users and their teams."""
+    """Sync rosters for all users who have auto_sync_enabled."""
     logger.info(f"Starting scheduled roster sync at {datetime.utcnow()}")
 
     async with async_session() as db:
         try:
-            # Get all users with BB keys
-            stmt = select(User).where(User.bb_key.isnot(None))
+            # Get all users with BB keys AND auto_sync_enabled
+            stmt = select(User).where(
+                User.bb_key.isnot(None),
+                User.auto_sync_enabled == True
+            )
             result = await db.execute(stmt)
             users = result.scalars().all()
 

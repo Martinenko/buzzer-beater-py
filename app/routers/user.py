@@ -232,3 +232,35 @@ async def logout(response: Response):
     """Logout (matches Spring API)"""
     response.delete_cookie(key=TOKEN_COOKIE_NAME)
     return {"success": True, "message": "Logged out"}
+
+
+@router.get("/settings")
+async def get_user_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get current user settings"""
+    user = await get_current_user_from_cookie(request, db)
+    return {
+        "autoSyncEnabled": user.auto_sync_enabled or False
+    }
+
+
+@router.post("/settings")
+async def update_user_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    autoSyncEnabled: bool = None
+):
+    """Update user settings"""
+    user = await get_current_user_from_cookie(request, db)
+
+    if autoSyncEnabled is not None:
+        user.auto_sync_enabled = autoSyncEnabled
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "autoSyncEnabled": user.auto_sync_enabled or False
+    }
