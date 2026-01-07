@@ -83,7 +83,7 @@ class BBApiClient:
                 "user_id": logged_in.get("userId"),
                 "login_name": logged_in.get("userName") or username,  # Private login name
                 "username": owner_username or username,  # Public username from <owner> element
-                "supporter": logged_in.get("supporter") == "1",
+                "supporter": logged_in.get("supporter") in ("1", "true", "True"),
                 "teams": teams
             }
 
