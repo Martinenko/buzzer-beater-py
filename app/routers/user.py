@@ -234,6 +234,20 @@ async def logout(response: Response):
     return {"success": True, "message": "Logged out"}
 
 
+@router.get("/me")
+async def get_current_user_info(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get current user info"""
+    user = await get_current_user_from_cookie(request, db)
+    return {
+        "username": user.username or user.login_name,
+        "supporter": user.supporter or False,
+        "autoSyncEnabled": user.auto_sync_enabled or False
+    }
+
+
 @router.get("/settings")
 async def get_user_settings(
     request: Request,
