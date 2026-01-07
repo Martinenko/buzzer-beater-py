@@ -21,5 +21,8 @@ passlib[bcrypt]==1.7.4
 # XML parsing (BuzzerBeater API returns XML)
 lxml==5.1.0
 
+# Scheduler
+apscheduler==3.10.4
+
 # Development
 python-dotenv==1.0.0

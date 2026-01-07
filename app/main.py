@@ -1,14 +1,27 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.routers import auth, players, shares, teams, user, team
+from app.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    start_scheduler()
+    yield
+    # Shutdown
+    stop_scheduler()
+
 
 app = FastAPI(
     title="BuzzerBeater Manager API",
     description="Backend API for BuzzerBeater Manager application",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS middleware
@@ -34,3 +47,13 @@ app.include_router(shares.router, prefix="/api/v1/shares", tags=["Player Sharing
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.post("/api/v1/admin/sync-all-rosters")
+async def trigger_roster_sync():
+    """Manually trigger roster sync for all users (admin endpoint)."""
+    from app.scheduler import sync_all_rosters
+    import asyncio
+    # Run in background so we don't timeout
+    asyncio.create_task(sync_all_rosters())
+    return {"success": True, "message": "Roster sync started in background"}
