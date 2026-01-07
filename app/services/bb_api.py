@@ -98,17 +98,21 @@ class BBApiClient:
             })
         return teams
 
-    async def get_roster(self, team_id: int, username: str = None) -> List[Dict[str, Any]]:
-        """Get team roster"""
+    async def get_roster(self, team_id: int, username: str = None, is_utopia: bool = False) -> List[Dict[str, Any]]:
+        """Get team roster. For UTOPIA teams, use secondteam=1 to get full skills."""
         if not self.bb_key:
             raise ValueError("BB key required for this operation")
 
         async with httpx.AsyncClient() as client:
             # First establish session by calling login
+            # For UTOPIA teams, include secondteam=1 to authenticate for that team
             if username:
+                login_params = {"login": username, "code": self.bb_key}
+                if is_utopia:
+                    login_params["secondteam"] = "1"
                 await client.get(
                     f"{self.base_url}/login.aspx",
-                    params={"login": username, "code": self.bb_key}
+                    params=login_params
                 )
 
             response = await client.get(
@@ -187,17 +191,21 @@ class BBApiClient:
                 "country_name": team.find("country").get("name") if team.find("country") is not None else None,
             }
 
-    async def get_economy(self, team_id: int, username: str = None) -> Dict[str, Any]:
-        """Get team economy data (full format matching Spring)"""
+    async def get_economy(self, team_id: int, username: str = None, is_utopia: bool = False) -> Dict[str, Any]:
+        """Get team economy data (full format matching Spring). For UTOPIA teams, use secondteam=1."""
         if not self.bb_key:
             raise ValueError("BB key required for this operation")
 
         async with httpx.AsyncClient() as client:
             # First establish session by calling login
+            # For UTOPIA teams, include secondteam=1 to authenticate for that team
             if username:
+                login_params = {"login": username, "code": self.bb_key}
+                if is_utopia:
+                    login_params["secondteam"] = "1"
                 await client.get(
                     f"{self.base_url}/login.aspx",
-                    params={"login": username, "code": self.bb_key}
+                    params=login_params
                 )
 
             response = await client.get(

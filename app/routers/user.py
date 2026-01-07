@@ -67,6 +67,19 @@ async def get_current_team_id_from_cookie(request: Request) -> int:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+def get_current_team_type_from_cookie(request: Request) -> str:
+    """Get current team type (MAIN or UTOPIA) from session cookie"""
+    token = request.cookies.get(TOKEN_COOKIE_NAME)
+    if not token:
+        return "MAIN"
+
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        return payload.get("team_type", "MAIN")
+    except JWTError:
+        return "MAIN"
+
+
 @router.get("/login")
 async def login(
     username: str,
@@ -112,6 +125,7 @@ async def login(
 
     # Create or update teams
     first_team_id = None
+    first_team_type = "MAIN"
     for team_data in result.get("teams", []):
         stmt = select(Team).where(Team.team_id == team_data["team_id"])
         team_result = await db.execute(stmt)
@@ -132,12 +146,14 @@ async def login(
 
         if first_team_id is None:
             first_team_id = team_data["team_id"]
+            first_team_type = team_data["team_type"]
 
     await db.commit()
 
     # Create JWT token and set as cookie (use login_name for auth)
+    # Include team_type so we know if it's UTOPIA (needs secondteam=1 for BB API)
     access_token = create_access_token(
-        data={"sub": user.login_name, "team_id": first_team_id}
+        data={"sub": user.login_name, "team_id": first_team_id, "team_type": first_team_type}
     )
 
     response.set_cookie(
@@ -194,9 +210,9 @@ async def switch_team(
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    # Create new token with updated team_id (use login_name for auth)
+    # Create new token with updated team_id and team_type (use login_name for auth)
     access_token = create_access_token(
-        data={"sub": user.login_name, "team_id": teamId}
+        data={"sub": user.login_name, "team_id": teamId, "team_type": team.team_type.value}
     )
 
     response.set_cookie(

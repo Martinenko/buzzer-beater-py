@@ -8,7 +8,7 @@ from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
 from app.services.bb_api import BBApiClient
-from app.routers.user import get_current_user_from_cookie, get_current_team_id_from_cookie
+from app.routers.user import get_current_user_from_cookie, get_current_team_id_from_cookie, get_current_team_type_from_cookie
 
 router = APIRouter()
 
@@ -21,12 +21,14 @@ async def get_economy(
     """Get team economy from BuzzerBeater API (matches Spring API)"""
     user = await get_current_user_from_cookie(request, db)
     current_team_id = await get_current_team_id_from_cookie(request)
+    team_type = get_current_team_type_from_cookie(request)
+    is_utopia = (team_type == "UTOPIA")
 
     if not user.bb_key:
         raise HTTPException(status_code=400, detail="BB key not available")
 
     bb_client = BBApiClient(user.bb_key)
-    economy = await bb_client.get_economy(current_team_id, username=user.login_name)
+    economy = await bb_client.get_economy(current_team_id, username=user.login_name, is_utopia=is_utopia)
 
     return economy
 
@@ -109,9 +111,12 @@ async def sync_roster(
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
+    # Check if this is a UTOPIA team (needs secondteam=1 for BB API)
+    is_utopia = (team.team_type.value == "UTOPIA")
+
     # Fetch roster from BB API
     bb_client = BBApiClient(user.bb_key)
-    bb_players = await bb_client.get_roster(current_team_id, username=user.login_name)
+    bb_players = await bb_client.get_roster(current_team_id, username=user.login_name, is_utopia=is_utopia)
 
     # Get current player IDs from BB
     bb_player_ids = {p["player_id"] for p in bb_players}
