@@ -5,6 +5,7 @@ Runs every Friday at 1 PM CET (12:00 UTC in winter, 11:00 UTC in summer).
 import asyncio
 import logging
 from datetime import datetime
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 
-async def sync_roster_for_team(user: User, team: Team, db: AsyncSession) -> int:
+async def sync_roster_for_team(user: User, team: Team, db: AsyncSession, http_client=None) -> int:
     """Sync roster for a single team. Returns number of players synced."""
     if not user.bb_key:
         logger.warning(f"User {user.username} has no BB key, skipping team {team.name}")
@@ -31,7 +32,12 @@ async def sync_roster_for_team(user: User, team: Team, db: AsyncSession) -> int:
 
     try:
         bb_client = BBApiClient(user.bb_key)
-        bb_players = await bb_client.get_roster(team.team_id, username=user.login_name, is_utopia=is_utopia)
+        bb_players = await bb_client.get_roster_with_client(
+            team.team_id,
+            username=user.login_name,
+            is_utopia=is_utopia,
+            client=http_client
+        )
 
         if not bb_players:
             logger.warning(f"No players returned for team {team.name} (ID: {team.team_id})")
@@ -122,45 +128,103 @@ async def sync_roster_for_team(user: User, team: Team, db: AsyncSession) -> int:
         return 0
 
 
-async def sync_all_rosters():
-    """Sync rosters for all users who have auto_sync_enabled."""
-    logger.info(f"Starting scheduled roster sync at {datetime.utcnow()}")
+MAX_CONCURRENT_SYNCS = 3  # Max users to sync in parallel
 
-    async with async_session() as db:
-        try:
-            # Get all users with BB keys AND auto_sync_enabled
-            stmt = select(User).where(
-                User.bb_key.isnot(None),
-                User.auto_sync_enabled == True
-            )
-            result = await db.execute(stmt)
-            users = result.scalars().all()
 
-            total_teams = 0
-            total_players = 0
-
-            for user in users:
+async def sync_user_rosters(user: User, semaphore: asyncio.Semaphore) -> tuple[int, int]:
+    """Sync all rosters for a single user. Returns (teams_synced, players_synced)."""
+    async with semaphore:  # Limit concurrency
+        async with async_session() as db:
+            try:
                 # Get all teams for this user
                 stmt = select(Team).where(Team.coach_id == user.id)
                 result = await db.execute(stmt)
                 teams = result.scalars().all()
 
-                for team in teams:
-                    logger.info(f"Syncing team {team.name} for user {user.username}")
-                    synced = await sync_roster_for_team(user, team, db)
-                    if synced > 0:
-                        total_teams += 1
-                        total_players += synced
+                if not teams:
+                    return 0, 0
 
-                    # Small delay between teams to avoid rate limiting
-                    await asyncio.sleep(1)
+                teams_synced = 0
+                players_synced = 0
 
-            await db.commit()
-            logger.info(f"Scheduled sync complete: {total_teams} teams, {total_players} players synced")
+                # Use single HTTP client per user to maintain session
+                async with httpx.AsyncClient() as http_client:
+                    bb_client = BBApiClient(user.bb_key)
 
-        except Exception as e:
-            logger.error(f"Error in scheduled roster sync: {e}")
-            await db.rollback()
+                    # Login first
+                    try:
+                        login_result = await bb_client.login_with_client(
+                            user.login_name,
+                            user.bb_key,
+                            http_client
+                        )
+                        if not login_result.get("success"):
+                            logger.error(f"Login failed for user {user.username}: {login_result.get('message')}")
+                            return 0, 0
+                        logger.info(f"Logged in as {user.username}")
+                    except Exception as e:
+                        logger.error(f"Login error for user {user.username}: {e}")
+                        return 0, 0
+
+                    # Sync each team
+                    for team in teams:
+                        logger.info(f"Syncing team {team.name} for user {user.username}")
+                        synced = await sync_roster_for_team(user, team, db, http_client)
+                        if synced > 0:
+                            teams_synced += 1
+                            players_synced += synced
+
+                        # Small delay between teams to avoid rate limiting
+                        await asyncio.sleep(1)
+
+                await db.commit()
+                return teams_synced, players_synced
+
+            except Exception as e:
+                logger.error(f"Error syncing user {user.username}: {e}")
+                await db.rollback()
+                return 0, 0
+
+
+async def sync_all_rosters():
+    """Sync rosters for all users who have auto_sync_enabled (parallel with limit)."""
+    logger.info(f"Starting scheduled roster sync at {datetime.utcnow()}")
+
+    async with async_session() as db:
+        # Get all users with BB keys AND auto_sync_enabled
+        stmt = select(User).where(
+            User.bb_key.isnot(None),
+            User.auto_sync_enabled == True
+        )
+        result = await db.execute(stmt)
+        users = result.scalars().all()
+
+    if not users:
+        logger.info("No users with auto_sync_enabled found")
+        return
+
+    logger.info(f"Syncing {len(users)} users (max {MAX_CONCURRENT_SYNCS} concurrent)")
+
+    # Create semaphore to limit concurrency
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_SYNCS)
+
+    # Run all user syncs in parallel (with semaphore limiting)
+    results = await asyncio.gather(
+        *[sync_user_rosters(user, semaphore) for user in users],
+        return_exceptions=True
+    )
+
+    # Sum up results
+    total_teams = 0
+    total_players = 0
+    for result in results:
+        if isinstance(result, tuple):
+            total_teams += result[0]
+            total_players += result[1]
+        elif isinstance(result, Exception):
+            logger.error(f"Sync task failed: {result}")
+
+    logger.info(f"Scheduled sync complete: {total_teams} teams, {total_players} players synced")
 
 
 def start_scheduler():

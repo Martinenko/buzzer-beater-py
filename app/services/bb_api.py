@@ -98,6 +98,53 @@ class BBApiClient:
             })
         return teams
 
+    async def login_with_client(self, username: str, password: str, client: httpx.AsyncClient) -> Dict[str, Any]:
+        """Login using an existing HTTP client (for session reuse)"""
+        response = await client.get(
+            f"{self.base_url}/login.aspx",
+            params={"login": username, "code": password}
+        )
+        root = self._parse_xml(response.text)
+
+        error = root.find(".//error")
+        if error is not None:
+            return {"success": False, "message": error.text}
+
+        logged_in = root.find(".//loggedIn")
+        if logged_in is None:
+            return {"success": False, "message": "Login failed"}
+
+        return {"success": True, "user_id": logged_in.get("userId")}
+
+    async def get_roster_with_client(
+        self,
+        team_id: int,
+        username: str,
+        is_utopia: bool,
+        client: httpx.AsyncClient
+    ) -> List[Dict[str, Any]]:
+        """Get roster using an existing HTTP client. Performs login for session."""
+        if not self.bb_key:
+            raise ValueError("BB key required for this operation")
+
+        # Login to establish session (with secondteam=1 for UTOPIA)
+        login_params = {"login": username, "code": self.bb_key}
+        if is_utopia:
+            login_params["secondteam"] = "1"
+        await client.get(f"{self.base_url}/login.aspx", params=login_params)
+
+        # Now get roster
+        response = await client.get(
+            f"{self.base_url}/roster.aspx",
+            params={"teamid": team_id}
+        )
+        root = self._parse_xml(response.text)
+
+        players = []
+        for player in root.findall(".//player"):
+            players.append(self._parse_player(player))
+        return players
+
     async def get_roster(self, team_id: int, username: str = None, is_utopia: bool = False) -> List[Dict[str, Any]]:
         """Get team roster. For UTOPIA teams, use secondteam=1 to get full skills."""
         if not self.bb_key:
