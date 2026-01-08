@@ -4,7 +4,7 @@ Runs every Friday at 1 PM CET (12:00 UTC in winter, 11:00 UTC in summer).
 """
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -15,11 +15,101 @@ from app.database import async_session
 from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
+from app.models.player_snapshot import PlayerSnapshot
 from app.services.bb_api import BBApiClient
 
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
+
+
+def get_current_bb_week() -> tuple[int, int]:
+    """Get current BB week info. Returns (year, week_of_year).
+    BB week starts on Friday and ends on Thursday."""
+    now = datetime.utcnow()
+    days_since_friday = (now.weekday() - 4) % 7
+    start_of_week = now - timedelta(days=days_since_friday)
+    year = start_of_week.isocalendar()[0]
+    week = start_of_week.isocalendar()[1]
+    return year, week
+
+
+async def create_player_snapshots(team: Team, db: AsyncSession) -> int:
+    """Create weekly snapshots for all active players on a team."""
+    year, week = get_current_bb_week()
+
+    # Get active players for this team
+    stmt = select(Player).where(Player.current_team_id == team.id, Player.active == True)
+    result = await db.execute(stmt)
+    players = result.scalars().all()
+
+    snapshots_created = 0
+    for player in players:
+        # Check if snapshot already exists for this week
+        stmt = select(PlayerSnapshot).where(
+            PlayerSnapshot.player_id == player.id,
+            PlayerSnapshot.year == year,
+            PlayerSnapshot.week_of_year == week
+        )
+        result = await db.execute(stmt)
+        existing_snapshot = result.scalar_one_or_none()
+
+        if existing_snapshot:
+            # Update existing snapshot
+            existing_snapshot.name = player.name
+            existing_snapshot.age = player.age
+            existing_snapshot.height = player.height
+            existing_snapshot.potential = player.potential
+            existing_snapshot.game_shape = player.game_shape
+            existing_snapshot.salary = player.salary
+            existing_snapshot.dmi = player.dmi
+            existing_snapshot.best_position = player.best_position
+            existing_snapshot.jump_shot = player.jump_shot
+            existing_snapshot.jump_range = player.jump_range
+            existing_snapshot.outside_defense = player.outside_defense
+            existing_snapshot.handling = player.handling
+            existing_snapshot.driving = player.driving
+            existing_snapshot.passing = player.passing
+            existing_snapshot.inside_shot = player.inside_shot
+            existing_snapshot.inside_defense = player.inside_defense
+            existing_snapshot.rebounding = player.rebounding
+            existing_snapshot.shot_blocking = player.shot_blocking
+            existing_snapshot.stamina = player.stamina
+            existing_snapshot.free_throws = player.free_throws
+            existing_snapshot.experience = player.experience
+        else:
+            # Create new snapshot
+            snapshot = PlayerSnapshot(
+                player_id=player.id,
+                team_id=team.id,
+                year=year,
+                week_of_year=week,
+                name=player.name,
+                age=player.age,
+                height=player.height,
+                potential=player.potential,
+                game_shape=player.game_shape,
+                salary=player.salary,
+                dmi=player.dmi,
+                best_position=player.best_position,
+                jump_shot=player.jump_shot,
+                jump_range=player.jump_range,
+                outside_defense=player.outside_defense,
+                handling=player.handling,
+                driving=player.driving,
+                passing=player.passing,
+                inside_shot=player.inside_shot,
+                inside_defense=player.inside_defense,
+                rebounding=player.rebounding,
+                shot_blocking=player.shot_blocking,
+                stamina=player.stamina,
+                free_throws=player.free_throws,
+                experience=player.experience,
+            )
+            db.add(snapshot)
+            snapshots_created += 1
+
+    return snapshots_created
 
 
 async def sync_roster_for_team(user: User, team: Team, db: AsyncSession, http_client=None) -> int:
@@ -173,6 +263,10 @@ async def sync_user_rosters(user: User, semaphore: asyncio.Semaphore) -> tuple[i
                         if synced > 0:
                             teams_synced += 1
                             players_synced += synced
+
+                            # Create snapshots for this team
+                            snapshots = await create_player_snapshots(team, db)
+                            logger.info(f"Created {snapshots} snapshots for team {team.name}")
 
                         # Small delay between teams to avoid rate limiting
                         await asyncio.sleep(1)

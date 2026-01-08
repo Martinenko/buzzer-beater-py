@@ -2,15 +2,29 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
+from datetime import datetime, timedelta
 
 from app.database import get_db
 from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
+from app.models.player_snapshot import PlayerSnapshot
 from app.services.bb_api import BBApiClient
 from app.routers.user import get_current_user_from_cookie, get_current_team_id_from_cookie, get_current_team_type_from_cookie
 
 router = APIRouter()
+
+
+def get_current_bb_week() -> tuple[int, int, str, str]:
+    """Get current BB week info. Returns (year, week_of_year, start_date, end_date).
+    BB week starts on Friday and ends on Thursday."""
+    now = datetime.utcnow()
+    days_since_friday = (now.weekday() - 4) % 7
+    start_of_week = now - timedelta(days=days_since_friday)
+    end_of_week = start_of_week + timedelta(days=6)
+    year = start_of_week.isocalendar()[0]
+    week = start_of_week.isocalendar()[1]
+    return year, week, start_of_week.strftime("%Y-%m-%d"), end_of_week.strftime("%Y-%m-%d")
 
 
 @router.get("/economy")
@@ -196,6 +210,78 @@ async def sync_roster(
 
         synced_count += 1
 
+    # Create snapshots for current week
+    year, week, _, _ = get_current_bb_week()
+
+    # Re-fetch players to get their UUIDs
+    stmt = select(Player).where(Player.current_team_id == team.id, Player.active == True)
+    result = await db.execute(stmt)
+    players = result.scalars().all()
+
+    for player in players:
+        # Check if snapshot already exists for this week
+        stmt = select(PlayerSnapshot).where(
+            PlayerSnapshot.player_id == player.id,
+            PlayerSnapshot.year == year,
+            PlayerSnapshot.week_of_year == week
+        )
+        result = await db.execute(stmt)
+        existing_snapshot = result.scalar_one_or_none()
+
+        if existing_snapshot:
+            # Update existing snapshot
+            existing_snapshot.name = player.name
+            existing_snapshot.age = player.age
+            existing_snapshot.height = player.height
+            existing_snapshot.potential = player.potential
+            existing_snapshot.game_shape = player.game_shape
+            existing_snapshot.salary = player.salary
+            existing_snapshot.dmi = player.dmi
+            existing_snapshot.best_position = player.best_position
+            existing_snapshot.jump_shot = player.jump_shot
+            existing_snapshot.jump_range = player.jump_range
+            existing_snapshot.outside_defense = player.outside_defense
+            existing_snapshot.handling = player.handling
+            existing_snapshot.driving = player.driving
+            existing_snapshot.passing = player.passing
+            existing_snapshot.inside_shot = player.inside_shot
+            existing_snapshot.inside_defense = player.inside_defense
+            existing_snapshot.rebounding = player.rebounding
+            existing_snapshot.shot_blocking = player.shot_blocking
+            existing_snapshot.stamina = player.stamina
+            existing_snapshot.free_throws = player.free_throws
+            existing_snapshot.experience = player.experience
+        else:
+            # Create new snapshot
+            snapshot = PlayerSnapshot(
+                player_id=player.id,
+                team_id=team.id,
+                year=year,
+                week_of_year=week,
+                name=player.name,
+                age=player.age,
+                height=player.height,
+                potential=player.potential,
+                game_shape=player.game_shape,
+                salary=player.salary,
+                dmi=player.dmi,
+                best_position=player.best_position,
+                jump_shot=player.jump_shot,
+                jump_range=player.jump_range,
+                outside_defense=player.outside_defense,
+                handling=player.handling,
+                driving=player.driving,
+                passing=player.passing,
+                inside_shot=player.inside_shot,
+                inside_defense=player.inside_defense,
+                rebounding=player.rebounding,
+                shot_blocking=player.shot_blocking,
+                stamina=player.stamina,
+                free_throws=player.free_throws,
+                experience=player.experience,
+            )
+            db.add(snapshot)
+
     await db.commit()
 
     return {"success": True, "message": f"Synced {synced_count} players"}
@@ -206,28 +292,48 @@ async def get_snapshots(
     request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get synced weeks/snapshots (matches Spring API)"""
-    from datetime import datetime, timedelta
+    """Get synced weeks/snapshots for current team"""
+    current_team_id = await get_current_team_id_from_cookie(request)
 
-    # Return current week so Angular loads the roster
-    now = datetime.utcnow()
+    # Get team
+    stmt = select(Team).where(Team.team_id == current_team_id)
+    result = await db.execute(stmt)
+    team = result.scalar_one_or_none()
 
-    # BB week starts on Friday (weekday 4) and ends on Thursday (weekday 3)
-    # Calculate days since last Friday
-    days_since_friday = (now.weekday() - 4) % 7
-    start_of_week = now - timedelta(days=days_since_friday)
-    end_of_week = start_of_week + timedelta(days=6)  # Thursday
+    if not team:
+        return []
 
-    # Use ISO week of the Friday start date
-    year = start_of_week.isocalendar()[0]
-    week = start_of_week.isocalendar()[1]
+    # Get distinct weeks with snapshots for this team
+    stmt = select(
+        PlayerSnapshot.year,
+        PlayerSnapshot.week_of_year
+    ).where(
+        PlayerSnapshot.team_id == team.id
+    ).distinct().order_by(
+        PlayerSnapshot.year.desc(),
+        PlayerSnapshot.week_of_year.desc()
+    )
+    result = await db.execute(stmt)
+    weeks = result.all()
 
-    return [{
-        "year": year,
-        "weekOfYear": week,
-        "startDate": start_of_week.strftime("%Y-%m-%d"),
-        "endDate": end_of_week.strftime("%Y-%m-%d")
-    }]
+    # Convert to response format with dates
+    snapshots = []
+    for year, week in weeks:
+        # Calculate start/end dates for this week
+        # Find the Friday of that ISO week
+        jan4 = datetime(year, 1, 4)  # Jan 4 is always in week 1
+        start_of_year_week1 = jan4 - timedelta(days=jan4.weekday())  # Monday of week 1
+        friday_of_week = start_of_year_week1 + timedelta(weeks=week-1, days=4)  # Friday
+        end_of_week = friday_of_week + timedelta(days=6)  # Thursday
+
+        snapshots.append({
+            "year": year,
+            "weekOfYear": week,
+            "startDate": friday_of_week.strftime("%Y-%m-%d"),
+            "endDate": end_of_week.strftime("%Y-%m-%d")
+        })
+
+    return snapshots
 
 
 @router.get("/roster/week")
@@ -237,6 +343,56 @@ async def get_roster_for_week(
     request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get roster for specific week (matches Spring API)"""
-    # For now, just return current roster - implement snapshots later
-    return await get_roster(request, db)
+    """Get roster snapshot for specific week"""
+    current_team_id = await get_current_team_id_from_cookie(request)
+
+    # Get team
+    stmt = select(Team).where(Team.team_id == current_team_id)
+    result = await db.execute(stmt)
+    team = result.scalar_one_or_none()
+
+    if not team:
+        return []
+
+    # Get snapshots for this week
+    stmt = select(PlayerSnapshot).where(
+        PlayerSnapshot.team_id == team.id,
+        PlayerSnapshot.year == year,
+        PlayerSnapshot.week_of_year == weekOfYear
+    )
+    result = await db.execute(stmt)
+    snapshots = result.scalars().all()
+
+    # Return in same format as roster endpoint
+    return [
+        {
+            "id": str(snapshot.player_id),  # Use player UUID
+            "firstName": snapshot.name.split()[0] if snapshot.name else "",
+            "lastName": " ".join(snapshot.name.split()[1:]) if snapshot.name and len(snapshot.name.split()) > 1 else "",
+            "name": snapshot.name,
+            "age": snapshot.age,
+            "height": snapshot.height,
+            "salary": snapshot.salary,
+            "dmi": snapshot.dmi,
+            "bestPosition": snapshot.best_position,
+            "potential": snapshot.potential,
+            "gameShape": snapshot.game_shape,
+            "skills": {
+                "jumpShot": snapshot.jump_shot,
+                "jumpRange": snapshot.jump_range,
+                "outsideDefense": snapshot.outside_defense,
+                "handling": snapshot.handling,
+                "driving": snapshot.driving,
+                "passing": snapshot.passing,
+                "insideShot": snapshot.inside_shot,
+                "insideDefense": snapshot.inside_defense,
+                "rebounding": snapshot.rebounding,
+                "shotBlocking": snapshot.shot_blocking,
+                "stamina": snapshot.stamina,
+                "freeThrows": snapshot.free_throws,
+                "experience": snapshot.experience,
+            },
+            "archived": False
+        }
+        for snapshot in snapshots
+    ]
