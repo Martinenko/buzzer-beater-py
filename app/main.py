@@ -49,7 +49,7 @@ async def health_check():
     return {"status": "healthy"}
 
 
-@app.post("/api/v1/admin/sync-all-rosters")
+@app.get("/api/v1/admin/sync-all-rosters")
 async def trigger_roster_sync():
     """Manually trigger roster sync for all users (admin endpoint)."""
     from app.scheduler import sync_all_rosters
