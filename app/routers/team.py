@@ -357,12 +357,12 @@ async def get_roster_for_week(
     if not team:
         return []
 
-    # Get snapshots for this week
+    # Get snapshots for this week, sorted by name
     stmt = select(PlayerSnapshot).where(
         PlayerSnapshot.team_id == team.id,
         PlayerSnapshot.year == year,
         PlayerSnapshot.week_of_year == weekOfYear
-    )
+    ).order_by(PlayerSnapshot.name)
     result = await db.execute(stmt)
     snapshots = result.scalars().all()
 
