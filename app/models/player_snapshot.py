@@ -12,6 +12,7 @@ class PlayerSnapshot(Base):
 
     # Reference to player
     player_id = Column(Uuid, ForeignKey("player.id"), nullable=False)
+    bb_player_id = Column(Integer, nullable=False)  # BuzzerBeater player ID
 
     # Week info
     year = Column(Integer, nullable=False)

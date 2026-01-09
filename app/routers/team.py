@@ -256,6 +256,7 @@ async def sync_roster(
             # Create new snapshot
             snapshot = PlayerSnapshot(
                 player_id=player.id,
+                bb_player_id=player.player_id,
                 team_id=team.id,
                 year=year,
                 week_of_year=week,
@@ -368,7 +369,7 @@ async def get_roster_for_week(
     # Return in same format as roster endpoint
     return [
         {
-            "id": str(snapshot.player_id),  # Use player UUID
+            "id": snapshot.bb_player_id,  # Use BB player ID (integer)
             "firstName": snapshot.name.split()[0] if snapshot.name else "",
             "lastName": " ".join(snapshot.name.split()[1:]) if snapshot.name and len(snapshot.name.split()) > 1 else "",
             "name": snapshot.name,

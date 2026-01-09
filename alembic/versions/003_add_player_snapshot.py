@@ -19,6 +19,7 @@ def upgrade() -> None:
         'player_snapshot',
         sa.Column('id', sa.Uuid(), nullable=False),
         sa.Column('player_id', sa.Uuid(), nullable=False),
+        sa.Column('bb_player_id', sa.Integer(), nullable=False),
         sa.Column('year', sa.Integer(), nullable=False),
         sa.Column('week_of_year', sa.Integer(), nullable=False),
         sa.Column('team_id', sa.Uuid(), nullable=False),
