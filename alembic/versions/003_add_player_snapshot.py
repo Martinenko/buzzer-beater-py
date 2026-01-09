@@ -23,6 +23,7 @@ def upgrade() -> None:
         sa.Column('week_of_year', sa.Integer(), nullable=False),
         sa.Column('team_id', sa.Uuid(), nullable=False),
         sa.Column('name', sa.String(100), nullable=False),
+        sa.Column('country', sa.String(50), nullable=True),
         sa.Column('age', sa.Integer(), nullable=True),
         sa.Column('height', sa.Integer(), nullable=False),
         sa.Column('potential', sa.Integer(), nullable=False),

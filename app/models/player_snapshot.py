@@ -22,6 +22,7 @@ class PlayerSnapshot(Base):
 
     # Basic info at time of snapshot
     name = Column(String(100), nullable=False)
+    country = Column(String(50), nullable=True)
     age = Column(Integer, nullable=True)
     height = Column(Integer, nullable=False)
     potential = Column(Integer, nullable=False)
