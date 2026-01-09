@@ -57,6 +57,7 @@ async def create_player_snapshots(team: Team, db: AsyncSession) -> int:
         if existing_snapshot:
             # Update existing snapshot
             existing_snapshot.name = player.name
+            existing_snapshot.country = player.country
             existing_snapshot.age = player.age
             existing_snapshot.height = player.height
             existing_snapshot.potential = player.potential
@@ -85,6 +86,7 @@ async def create_player_snapshots(team: Team, db: AsyncSession) -> int:
                 year=year,
                 week_of_year=week,
                 name=player.name,
+                country=player.country,
                 age=player.age,
                 height=player.height,
                 potential=player.potential,

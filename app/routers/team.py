@@ -231,6 +231,7 @@ async def sync_roster(
         if existing_snapshot:
             # Update existing snapshot
             existing_snapshot.name = player.name
+            existing_snapshot.country = player.country
             existing_snapshot.age = player.age
             existing_snapshot.height = player.height
             existing_snapshot.potential = player.potential
@@ -259,6 +260,7 @@ async def sync_roster(
                 year=year,
                 week_of_year=week,
                 name=player.name,
+                country=player.country,
                 age=player.age,
                 height=player.height,
                 potential=player.potential,
@@ -370,6 +372,7 @@ async def get_roster_for_week(
             "firstName": snapshot.name.split()[0] if snapshot.name else "",
             "lastName": " ".join(snapshot.name.split()[1:]) if snapshot.name and len(snapshot.name.split()) > 1 else "",
             "name": snapshot.name,
+            "nationality": snapshot.country,
             "age": snapshot.age,
             "height": snapshot.height,
             "salary": snapshot.salary,
