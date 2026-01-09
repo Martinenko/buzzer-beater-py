@@ -366,14 +366,14 @@ async def get_roster_for_week(
     result = await db.execute(stmt)
     snapshots = result.scalars().all()
 
-    # Return in same format as roster endpoint
+    # Return in same format as old roster endpoint
     return [
         {
-            "id": snapshot.bb_player_id,  # Use BB player ID (integer)
+            "id": snapshot.bb_player_id,
             "firstName": snapshot.name.split()[0] if snapshot.name else "",
             "lastName": " ".join(snapshot.name.split()[1:]) if snapshot.name and len(snapshot.name.split()) > 1 else "",
             "name": snapshot.name,
-            "nationality": snapshot.country,
+            "country": snapshot.country,
             "age": snapshot.age,
             "height": snapshot.height,
             "salary": snapshot.salary,
@@ -381,21 +381,19 @@ async def get_roster_for_week(
             "bestPosition": snapshot.best_position,
             "potential": snapshot.potential,
             "gameShape": snapshot.game_shape,
-            "skills": {
-                "jumpShot": snapshot.jump_shot,
-                "jumpRange": snapshot.jump_range,
-                "outsideDefense": snapshot.outside_defense,
-                "handling": snapshot.handling,
-                "driving": snapshot.driving,
-                "passing": snapshot.passing,
-                "insideShot": snapshot.inside_shot,
-                "insideDefense": snapshot.inside_defense,
-                "rebounding": snapshot.rebounding,
-                "shotBlocking": snapshot.shot_blocking,
-                "stamina": snapshot.stamina,
-                "freeThrows": snapshot.free_throws,
-                "experience": snapshot.experience,
-            },
+            "jumpShot": snapshot.jump_shot,
+            "jumpRange": snapshot.jump_range,
+            "outsideDefense": snapshot.outside_defense,
+            "handling": snapshot.handling,
+            "driving": snapshot.driving,
+            "passing": snapshot.passing,
+            "insideShot": snapshot.inside_shot,
+            "insideDefense": snapshot.inside_defense,
+            "rebounding": snapshot.rebounding,
+            "shotBlocking": snapshot.shot_blocking,
+            "stamina": snapshot.stamina,
+            "freeThrows": snapshot.free_throws,
+            "experience": snapshot.experience,
             "archived": False
         }
         for snapshot in snapshots

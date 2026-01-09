@@ -82,6 +82,7 @@ async def create_player_snapshots(team: Team, db: AsyncSession) -> int:
             # Create new snapshot
             snapshot = PlayerSnapshot(
                 player_id=player.id,
+                bb_player_id=player.player_id,
                 team_id=team.id,
                 year=year,
                 week_of_year=week,
