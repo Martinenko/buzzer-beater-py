@@ -19,3 +19,6 @@ class User(Base):
     teams = relationship("Team", back_populates="coach")
     shares_sent = relationship("PlayerShare", foreign_keys="PlayerShare.owner_id", back_populates="owner")
     shares_received = relationship("PlayerShare", foreign_keys="PlayerShare.recipient_id", back_populates="recipient")
+    threads_as_owner = relationship("PlayerThread", foreign_keys="PlayerThread.owner_id", back_populates="owner")
+    threads_as_participant = relationship("PlayerThread", foreign_keys="PlayerThread.participant_id", back_populates="participant")
+    player_messages = relationship("PlayerMessage", back_populates="sender")

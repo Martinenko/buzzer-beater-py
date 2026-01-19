@@ -44,3 +44,4 @@ class Player(Base):
     # Relationships
     current_team = relationship("Team", back_populates="players")
     shares = relationship("PlayerShare", back_populates="player")
+    threads = relationship("PlayerThread", back_populates="player")

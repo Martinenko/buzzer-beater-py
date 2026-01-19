@@ -1,5 +1,4 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, HTTPException, status, Request
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -7,53 +6,51 @@ from sqlalchemy import select
 from app.database import get_db
 from app.config import get_settings
 from app.models.user import User
-from app.schemas.auth import TokenData
 
 settings = get_settings()
-security = HTTPBearer()
+TOKEN_COOKIE_NAME = "bb_session"
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    """Get current authenticated user from JWT token"""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    """Get current authenticated user from session cookie"""
+    token = request.cookies.get(TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=403, detail="Not authenticated")
 
     try:
         payload = jwt.decode(
-            credentials.credentials,
+            token,
             settings.secret_key,
             algorithms=[settings.algorithm]
         )
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-        token_data = TokenData(username=username, team_id=payload.get("team_id"))
+        login_name: str = payload.get("sub")
+        if login_name is None:
+            raise HTTPException(status_code=403, detail="Invalid token")
     except JWTError:
-        raise credentials_exception
+        raise HTTPException(status_code=403, detail="Invalid token")
 
-    stmt = select(User).where(User.username == token_data.username)
+    stmt = select(User).where(User.login_name == login_name)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
     if user is None:
-        raise credentials_exception
+        raise HTTPException(status_code=403, detail="User not found")
 
     return user
 
 
-async def get_current_team_id(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> int:
-    """Get current team ID from JWT token"""
+async def get_current_team_id(request: Request) -> int:
+    """Get current team ID from session cookie"""
+    token = request.cookies.get(TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=403, detail="Not authenticated")
+
     try:
         payload = jwt.decode(
-            credentials.credentials,
+            token,
             settings.secret_key,
             algorithms=[settings.algorithm]
         )
@@ -62,4 +59,4 @@ async def get_current_team_id(
             raise HTTPException(status_code=400, detail="No team selected")
         return team_id
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=403, detail="Invalid token")

@@ -75,7 +75,8 @@ async def get_roster(
     # Return in Spring format
     return [
         {
-            "id": player.player_id,
+            "id": str(player.id),  # UUID for internal use
+            "playerId": player.player_id,  # BB player ID for links
             "name": player.name,
             "country": player.country,
             "age": player.age,
@@ -369,7 +370,8 @@ async def get_roster_for_week(
     # Return in same format as old roster endpoint
     return [
         {
-            "id": snapshot.bb_player_id,
+            "id": str(snapshot.player_id),  # UUID for internal use
+            "playerId": snapshot.bb_player_id,  # BB player ID for links
             "firstName": snapshot.name.split()[0] if snapshot.name else "",
             "lastName": " ".join(snapshot.name.split()[1:]) if snapshot.name and len(snapshot.name.split()) > 1 else "",
             "name": snapshot.name,

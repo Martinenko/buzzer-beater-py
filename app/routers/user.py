@@ -160,9 +160,9 @@ async def login(
         key=TOKEN_COOKIE_NAME,
         value=access_token,
         httponly=True,
-        secure=True,
+        secure=False,  # Set to True in production
         max_age=settings.access_token_expire_minutes * 60,
-        samesite="none"
+        samesite="lax"
     )
 
     return {"success": True, "message": "Login successful"}
@@ -219,9 +219,9 @@ async def switch_team(
         key=TOKEN_COOKIE_NAME,
         value=access_token,
         httponly=True,
-        secure=True,
+        secure=False,  # Set to True in production
         max_age=settings.access_token_expire_minutes * 60,
-        samesite="none"
+        samesite="lax"
     )
 
     return {"success": True, "message": f"Switched to team {team.name}"}

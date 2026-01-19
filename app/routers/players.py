@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from typing import List
 
 from app.database import get_db
 from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
+from app.models.player_share import PlayerShare
 from app.schemas.player import PlayerResponse, PlayerRosterResponse
 from app.dependencies import get_current_user, get_current_team_id
 from app.services.bb_api import BBApiClient
@@ -50,6 +52,7 @@ async def get_roster(
             "salary": player.salary,
             "dmi": player.dmi,
             "bestPosition": player.best_position,
+            "potential": player.potential,
             "archived": not player.active,
             "skills": {
                 "jumpShot": player.jump_shot,
@@ -174,3 +177,185 @@ async def sync_roster(
     await db.commit()
 
     return {"success": True, "message": f"Synced {synced_count} players"}
+
+
+@router.get("/all")
+async def get_all_players(
+    shared_only: bool = False,
+    page: int = 1,
+    page_size: int = 50,
+    current_user: User = Depends(get_current_user),
+    current_team_id: int = Depends(get_current_team_id),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all players except those from current user's teams (paginated)"""
+    from sqlalchemy import func
+
+    # Get all teams owned by current user
+    stmt = select(Team.id).where(Team.coach_id == current_user.id)
+    result = await db.execute(stmt)
+    user_team_ids = [row[0] for row in result.all()]
+
+    # Get shares where current user is recipient
+    shares_stmt = select(PlayerShare.player_id).where(
+        PlayerShare.recipient_id == current_user.id
+    )
+    shares_result = await db.execute(shares_stmt)
+    shared_player_ids = {row[0] for row in shares_result.all()}
+
+    # Build base query for players
+    if shared_only:
+        if not shared_player_ids:
+            return {"players": [], "total": 0, "page": page, "pageSize": page_size, "totalPages": 0}
+        base_query = select(Player).where(
+            Player.id.in_(shared_player_ids)
+        )
+    else:
+        if user_team_ids:
+            base_query = select(Player).where(
+                Player.active == True,
+                Player.current_team_id.notin_(user_team_ids)
+            )
+        else:
+            base_query = select(Player).where(
+                Player.active == True
+            )
+
+    # Get total count
+    count_stmt = select(func.count()).select_from(base_query.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar()
+
+    # Apply pagination
+    offset = (page - 1) * page_size
+    stmt = base_query.options(selectinload(Player.current_team)).offset(offset).limit(page_size)
+
+    result = await db.execute(stmt)
+    players = result.scalars().all()
+
+    total_pages = (total + page_size - 1) // page_size
+
+    return {
+        "players": [
+            {
+                "id": str(player.id),
+                "playerId": player.player_id,
+                "name": player.name,
+                "country": player.country,
+                "teamName": player.current_team.name if player.current_team else None,
+                "age": player.age,
+                "height": player.height,
+                "bestPosition": player.best_position,
+                "potential": player.potential,
+                "isSharedWithMe": player.id in shared_player_ids,
+                "skills": {
+                    "jumpShot": player.jump_shot,
+                    "jumpRange": player.jump_range,
+                    "outsideDefense": player.outside_defense,
+                    "handling": player.handling,
+                    "driving": player.driving,
+                    "passing": player.passing,
+                    "insideShot": player.inside_shot,
+                    "insideDefense": player.inside_defense,
+                    "rebounding": player.rebounding,
+                    "shotBlocking": player.shot_blocking,
+                    "stamina": player.stamina,
+                    "freeThrows": player.free_throws,
+                    "experience": player.experience,
+                } if player.id in shared_player_ids else None,
+            }
+            for player in players
+        ],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+        "totalPages": total_pages
+    }
+
+
+@router.get("/{player_id}")
+async def get_player(
+    player_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get player details by BuzzerBeater player_id.
+
+    Access control:
+    - Own player: full access (skills, salary, dmi, gameShape)
+    - Shared player: full access
+    - Other player: public info only (no skills, salary, dmi, gameShape)
+    """
+    # Find player by BB player_id
+    stmt = select(Player).options(selectinload(Player.current_team)).where(
+        Player.player_id == player_id
+    )
+    result = await db.execute(stmt)
+    player = result.scalar_one_or_none()
+
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    # Get all teams owned by current user
+    stmt = select(Team.id).where(Team.coach_id == current_user.id)
+    result = await db.execute(stmt)
+    user_team_ids = [row[0] for row in result.all()]
+
+    # Check if player is owned by current user
+    is_own_player = player.current_team_id in user_team_ids
+
+    # Check if player is shared with current user
+    is_shared_player = False
+    if not is_own_player:
+        share_stmt = select(PlayerShare).where(
+            PlayerShare.player_id == player.id,
+            PlayerShare.recipient_id == current_user.id
+        )
+        share_result = await db.execute(share_stmt)
+        is_shared_player = share_result.scalar_one_or_none() is not None
+
+    has_full_access = is_own_player or is_shared_player
+
+    # Build response
+    response = {
+        "id": str(player.id),
+        "playerId": player.player_id,
+        "name": player.name,
+        "country": player.country,
+        "teamName": player.current_team.name if player.current_team else None,
+        "teamId": player.current_team.team_id if player.current_team else None,
+        "age": player.age,
+        "height": player.height,
+        "bestPosition": player.best_position,
+        "potential": player.potential,
+        "hasFullAccess": has_full_access,
+        "isOwnPlayer": is_own_player,
+        "isSharedPlayer": is_shared_player,
+    }
+
+    if has_full_access:
+        response["salary"] = player.salary
+        response["dmi"] = player.dmi
+        response["gameShape"] = player.game_shape
+        response["skills"] = {
+            "jumpShot": player.jump_shot,
+            "jumpRange": player.jump_range,
+            "outsideDefense": player.outside_defense,
+            "handling": player.handling,
+            "driving": player.driving,
+            "passing": player.passing,
+            "insideShot": player.inside_shot,
+            "insideDefense": player.inside_defense,
+            "rebounding": player.rebounding,
+            "shotBlocking": player.shot_blocking,
+            "stamina": player.stamina,
+            "freeThrows": player.free_throws,
+            "experience": player.experience,
+        }
+    else:
+        response["salary"] = None
+        response["dmi"] = None
+        response["gameShape"] = None
+        response["skills"] = None
+
+    return response
