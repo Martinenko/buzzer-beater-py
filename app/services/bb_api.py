@@ -1,5 +1,4 @@
 import httpx
-import certifi
 from lxml import etree
 from typing import Optional, Dict, Any, List
 from app.config import get_settings
@@ -19,7 +18,7 @@ class BBApiClient:
 
     async def login(self, username: str, password: str) -> Dict[str, Any]:
         """Login to BuzzerBeater and get access key"""
-        async with httpx.AsyncClient(verify=certifi.where()) as client:
+        async with httpx.AsyncClient(verify=settings.bb_api_verify_ssl) as client:
             # Step 1: Verify login credentials
             response = await client.get(
                 f"{self.base_url}/login.aspx",
@@ -151,7 +150,7 @@ class BBApiClient:
         if not self.bb_key:
             raise ValueError("BB key required for this operation")
 
-        async with httpx.AsyncClient(verify=certifi.where()) as client:
+        async with httpx.AsyncClient(verify=settings.bb_api_verify_ssl) as client:
             # First establish session by calling login
             # For UTOPIA teams, include secondteam=1 to authenticate for that team
             if username:
@@ -220,7 +219,7 @@ class BBApiClient:
         if not self.bb_key:
             raise ValueError("BB key required for this operation")
 
-        async with httpx.AsyncClient(verify=certifi.where()) as client:
+        async with httpx.AsyncClient(verify=settings.bb_api_verify_ssl) as client:
             response = await client.get(
                 f"{self.base_url}/teaminfo.aspx",
                 params={"accessKey": self.bb_key, "teamid": team_id}
@@ -244,7 +243,7 @@ class BBApiClient:
         if not self.bb_key:
             raise ValueError("BB key required for this operation")
 
-        async with httpx.AsyncClient(verify=certifi.where()) as client:
+        async with httpx.AsyncClient(verify=settings.bb_api_verify_ssl) as client:
             # First establish session by calling login
             # For UTOPIA teams, include secondteam=1 to authenticate for that team
             if username:

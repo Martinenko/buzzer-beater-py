@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     # BuzzerBeater API
     bb_api_url: str = "https://bbapi.buzzerbeater.com"
+    bb_api_verify_ssl: bool = False  # Set to False if BB has expired SSL cert
 
     # Security
     secret_key: str
