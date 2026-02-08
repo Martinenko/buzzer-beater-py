@@ -1,5 +1,5 @@
 """Training plan for a player: target skills at end of training."""
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Uuid
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text, Uuid
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
@@ -30,5 +30,6 @@ class PlayerTrainingPlan(Base):
     stamina = Column(Integer, nullable=True)
     free_throws = Column(Integer, nullable=True)
     experience = Column(Integer, nullable=True)
+    notes = Column(Text, nullable=True)
 
     player = relationship("Player", back_populates="training_plan")

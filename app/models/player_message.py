@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Text, Uuid
+from sqlalchemy import Column, DateTime, ForeignKey, Text, Uuid, Boolean
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
@@ -12,6 +12,7 @@ class PlayerMessage(Base):
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     content = Column(Text, nullable=False)
+    read_at = Column(DateTime, nullable=True, default=None)
 
     # Foreign keys
     thread_id = Column(Uuid, ForeignKey("player_thread.id", ondelete="CASCADE"), nullable=False)

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func, update
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
@@ -46,6 +46,7 @@ class MessageDto(BaseModel):
     sender_username: str
     created_at: datetime
     is_mine: bool
+    is_read: bool
 
 
 class ThreadDto(BaseModel):
@@ -89,6 +90,41 @@ class ThreadDetailDto(BaseModel):
     messages: List[MessageDto]
 
 
+def _get_unread_count(thread: PlayerThread, current_user_id: UUID) -> int:
+    """Count messages not sent by current user that haven't been read."""
+    return sum(
+        1 for msg in thread.messages
+        if msg.sender_id != current_user_id and msg.read_at is None
+    )
+
+
+def _make_message_dto(msg: PlayerMessage, current_user_id: UUID) -> MessageDto:
+    return MessageDto(
+        id=msg.id,
+        content=msg.content,
+        sender_id=msg.sender_id,
+        sender_username=msg.sender.username or msg.sender.login_name,
+        created_at=msg.created_at,
+        is_mine=msg.sender_id == current_user_id,
+        is_read=msg.read_at is not None,
+    )
+
+
+async def _mark_messages_read(db: AsyncSession, thread_id: UUID, current_user_id: UUID) -> None:
+    """Mark all messages in a thread as read for the current user (messages not sent by them)."""
+    stmt = (
+        update(PlayerMessage)
+        .where(
+            PlayerMessage.thread_id == thread_id,
+            PlayerMessage.sender_id != current_user_id,
+            PlayerMessage.read_at.is_(None),
+        )
+        .values(read_at=datetime.utcnow())
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+
 @router.get("", response_model=List[ThreadDto])
 async def get_my_threads(
     request: Request,
@@ -129,7 +165,7 @@ async def get_my_threads(
             created_at=thread.created_at,
             updated_at=thread.updated_at,
             last_message=thread.messages[-1].content if thread.messages else None,
-            unread_count=0,  # TODO: implement read tracking
+            unread_count=_get_unread_count(thread, current_user.id),
             is_owner=thread.owner_id == current_user.id
         )
         for thread in threads
@@ -185,7 +221,7 @@ async def get_threads_for_player_as_owner(
             created_at=thread.created_at,
             updated_at=thread.updated_at,
             last_message=thread.messages[-1].content if thread.messages else None,
-            unread_count=0,
+            unread_count=_get_unread_count(thread, current_user.id),
             is_owner=True
         )
         for thread in threads
@@ -249,7 +285,8 @@ async def get_thread_for_player(
     if not thread:
         return None
 
-    return ThreadDetailDto(
+    # Build response before marking as read so we know which were unread
+    response = ThreadDetailDto(
         id=thread.id,
         player_id=thread.player.player_id,
         player_name=thread.player.name,
@@ -260,17 +297,15 @@ async def get_thread_for_player(
         is_active=thread.is_active,
         is_owner=thread.owner_id == current_user.id,
         messages=[
-            MessageDto(
-                id=msg.id,
-                content=msg.content,
-                sender_id=msg.sender_id,
-                sender_username=msg.sender.username or msg.sender.login_name,
-                created_at=msg.created_at,
-                is_mine=msg.sender_id == current_user.id
-            )
+            _make_message_dto(msg, current_user.id)
             for msg in thread.messages
         ]
     )
+
+    # Mark messages as read
+    await _mark_messages_read(db, thread.id, current_user.id)
+
+    return response
 
 
 @router.post("/player/{player_id}", response_model=ThreadDetailDto)
@@ -361,14 +396,7 @@ async def create_or_get_thread(
         is_active=thread.is_active,
         is_owner=thread.owner_id == current_user.id,
         messages=[
-            MessageDto(
-                id=msg.id,
-                content=msg.content,
-                sender_id=msg.sender_id,
-                sender_username=msg.sender.username or msg.sender.login_name,
-                created_at=msg.created_at,
-                is_mine=msg.sender_id == current_user.id
-            )
+            _make_message_dto(msg, current_user.id)
             for msg in thread.messages
         ]
     )
@@ -405,7 +433,8 @@ async def get_thread(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    return ThreadDetailDto(
+    # Build response before marking as read so we know which were unread
+    response = ThreadDetailDto(
         id=thread.id,
         player_id=thread.player.player_id,
         player_name=thread.player.name,
@@ -416,17 +445,15 @@ async def get_thread(
         is_active=thread.is_active,
         is_owner=thread.owner_id == current_user.id,
         messages=[
-            MessageDto(
-                id=msg.id,
-                content=msg.content,
-                sender_id=msg.sender_id,
-                sender_username=msg.sender.username or msg.sender.login_name,
-                created_at=msg.created_at,
-                is_mine=msg.sender_id == current_user.id
-            )
+            _make_message_dto(msg, current_user.id)
             for msg in thread.messages
         ]
     )
+
+    # Mark messages as read
+    await _mark_messages_read(db, thread.id, current_user.id)
+
+    return response
 
 
 @router.post("/{thread_id}/messages", response_model=MessageDto)
@@ -479,5 +506,6 @@ async def send_message(
         sender_id=message.sender_id,
         sender_username=current_user.username or current_user.login_name,
         created_at=message.created_at,
-        is_mine=True
+        is_mine=True,
+        is_read=False,
     )

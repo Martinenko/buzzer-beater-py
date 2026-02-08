@@ -1,4 +1,4 @@
-"""Player training plan API. Only for own players."""
+"""Player training plan API. Owner can edit; shared users can view if share_plan=True."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,15 +9,16 @@ from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
 from app.models.player_training_plan import PlayerTrainingPlan
+from app.models.player_share import PlayerShare
 from app.schemas.plan import PlanUpsert, PlanResponse
 from app.dependencies import get_current_user
 
 router = APIRouter()
 
-_SKILL_ATTRS = [
+_PLAN_ATTRS = [
     "jump_shot", "jump_range", "outside_defense", "handling", "driving", "passing",
     "inside_shot", "inside_defense", "rebounding", "shot_blocking",
-    "stamina", "free_throws", "experience",
+    "stamina", "free_throws", "experience", "notes",
 ]
 
 
@@ -40,6 +41,36 @@ async def _get_owned_player(db: AsyncSession, user: User, player_id: int) -> Pla
     return player
 
 
+async def _get_viewable_player(db: AsyncSession, user: User, player_id: int) -> Player:
+    """Resolve BB player_id → Player. Allow if owner OR shared with share_plan=True."""
+    stmt = select(Player).options(selectinload(Player.current_team)).where(
+        Player.player_id == player_id
+    )
+    result = await db.execute(stmt)
+    player = result.scalar_one_or_none()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    # Check ownership
+    stmt = select(Team.id).where(Team.coach_id == user.id)
+    result = await db.execute(stmt)
+    user_team_ids = [r[0] for r in result.all()]
+    if player.current_team_id in user_team_ids:
+        return player
+
+    # Check share with share_plan=True
+    stmt = select(PlayerShare.id).where(
+        PlayerShare.player_id == player.id,
+        PlayerShare.recipient_id == user.id,
+        PlayerShare.share_plan == True,
+    )
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is not None:
+        return player
+
+    raise HTTPException(status_code=404, detail="Player not found")
+
+
 def _plan_to_response(plan: PlayerTrainingPlan, bb_player_id: int) -> PlanResponse:
     data = {
         "id": plan.id,
@@ -47,7 +78,7 @@ def _plan_to_response(plan: PlayerTrainingPlan, bb_player_id: int) -> PlanRespon
         "created_at": plan.created_at,
         "updated_at": plan.updated_at,
     }
-    for attr in _SKILL_ATTRS:
+    for attr in _PLAN_ATTRS:
         data[attr] = getattr(plan, attr, None)
     return PlanResponse.model_validate(data)
 
@@ -58,8 +89,8 @@ async def get_plan(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get training plan for a player. 404 if none."""
-    player = await _get_owned_player(db, current_user, player_id)
+    """Get training plan for a player. 404 if none. Shared users can view if share_plan=True."""
+    player = await _get_viewable_player(db, current_user, player_id)
 
     stmt = select(PlayerTrainingPlan).where(PlayerTrainingPlan.player_id == player.id)
     result = await db.execute(stmt)
@@ -85,12 +116,12 @@ async def upsert_plan(
     plan = result.scalar_one_or_none()
 
     if plan:
-        for attr in _SKILL_ATTRS:
+        for attr in _PLAN_ATTRS:
             setattr(plan, attr, getattr(body, attr, None))
     else:
         plan = PlayerTrainingPlan(
             player_id=player.id,
-            **{a: getattr(body, a, None) for a in _SKILL_ATTRS},
+            **{a: getattr(body, a, None) for a in _PLAN_ATTRS},
         )
         db.add(plan)
 

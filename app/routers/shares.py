@@ -10,7 +10,7 @@ from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
 from app.models.player_share import PlayerShare
-from app.schemas.player_share import SharePlayerRequest, ShareResponse, PlayerShareDto, PlayerInShare
+from app.schemas.player_share import SharePlayerRequest, ShareResponse, PlayerShareDto, PlayerInShare, UpdateShareRequest
 from app.schemas.user import UserSearchResult
 from app.routers.user import get_current_user_from_cookie, get_current_team_id_from_cookie
 
@@ -136,7 +136,8 @@ async def get_received_shares(
             owner_team_id=share.player.current_team.team_id if share.player.current_team else None,
             recipient_username=current_user.username,
             recipient_name=current_user.username,
-            shared_at=share.created_at
+            shared_at=share.created_at,
+            share_plan=share.share_plan,
         )
         for share in shares
     ]
@@ -145,9 +146,10 @@ async def get_received_shares(
 @router.get("/sent", response_model=List[PlayerShareDto])
 async def get_sent_shares(
     request: Request,
-    db: AsyncSession = Depends(get_db)
+    player_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get players I have shared"""
+    """Get players I have shared. Optional player_id filter (BB player ID)."""
     current_user = await get_current_user_from_cookie(request, db)
 
     stmt = (
@@ -158,6 +160,8 @@ async def get_sent_shares(
         )
         .where(PlayerShare.owner_id == current_user.id)
     )
+    if player_id is not None:
+        stmt = stmt.join(Player, PlayerShare.player_id == Player.id).where(Player.player_id == player_id)
     result = await db.execute(stmt)
     shares = result.scalars().all()
 
@@ -191,7 +195,8 @@ async def get_sent_shares(
             owner_team_id=share.player.current_team.team_id if share.player.current_team else None,
             recipient_username=share.recipient.username,
             recipient_name=share.recipient.username,
-            shared_at=share.created_at
+            shared_at=share.created_at,
+            share_plan=share.share_plan,
         )
         for share in shares
     ]
@@ -220,6 +225,32 @@ async def remove_share(
     await db.commit()
 
     return {"success": True, "message": "Share removed"}
+
+
+@router.patch("/{share_id}")
+async def update_share(
+    share_id: UUID,
+    body: UpdateShareRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update share settings (e.g. share_plan toggle). Owner only."""
+    current_user = await get_current_user_from_cookie(request, db)
+
+    stmt = select(PlayerShare).where(
+        PlayerShare.id == share_id,
+        PlayerShare.owner_id == current_user.id,
+    )
+    result = await db.execute(stmt)
+    share = result.scalar_one_or_none()
+
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+
+    share.share_plan = body.share_plan
+    await db.commit()
+
+    return {"success": True}
 
 
 @router.get("/users/search", response_model=List[UserSearchResult])
