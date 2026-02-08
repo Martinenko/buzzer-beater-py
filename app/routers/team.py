@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from typing import List
 from datetime import datetime, timedelta
 
@@ -358,20 +359,57 @@ async def get_roster_for_week(
     if not team:
         return []
 
-    # Get snapshots for this week, sorted by name
-    stmt = select(PlayerSnapshot).where(
-        PlayerSnapshot.team_id == team.id,
-        PlayerSnapshot.year == year,
-        PlayerSnapshot.week_of_year == weekOfYear
-    ).order_by(PlayerSnapshot.name)
+    # Get snapshots for this week
+    stmt = (
+        select(PlayerSnapshot)
+        .options(selectinload(PlayerSnapshot.player))
+        .where(
+            PlayerSnapshot.team_id == team.id,
+            PlayerSnapshot.year == year,
+            PlayerSnapshot.week_of_year == weekOfYear
+        )
+        .order_by(PlayerSnapshot.name)
+    )
     result = await db.execute(stmt)
     snapshots = result.scalars().all()
 
-    # Return in same format as old roster endpoint
-    return [
-        {
-            "id": str(snapshot.player_id),  # UUID for internal use
-            "playerId": snapshot.bb_player_id,  # BB player ID for links
+    # Track which players we already have
+    seen_player_ids = {s.player_id for s in snapshots}
+
+    # Find archived players (inactive) who have snapshots for this team but not this week
+    # Get their most recent snapshot instead
+    stmt = (
+        select(Player)
+        .where(
+            Player.current_team_id == team.id,
+            Player.active == False,
+            Player.id.notin_(seen_player_ids) if seen_player_ids else True
+        )
+    )
+    result = await db.execute(stmt)
+    archived_players = result.scalars().all()
+
+    archived_snapshots = []
+    for player in archived_players:
+        # Get latest snapshot for this player on this team
+        stmt = (
+            select(PlayerSnapshot)
+            .where(
+                PlayerSnapshot.player_id == player.id,
+                PlayerSnapshot.team_id == team.id,
+            )
+            .order_by(PlayerSnapshot.year.desc(), PlayerSnapshot.week_of_year.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        last_snapshot = result.scalar_one_or_none()
+        if last_snapshot:
+            archived_snapshots.append(last_snapshot)
+
+    def _snapshot_to_dict(snapshot, archived, snapshot_label=None):
+        return {
+            "id": str(snapshot.player_id),
+            "playerId": snapshot.bb_player_id,
             "firstName": snapshot.name.split()[0] if snapshot.name else "",
             "lastName": " ".join(snapshot.name.split()[1:]) if snapshot.name and len(snapshot.name.split()) > 1 else "",
             "name": snapshot.name,
@@ -396,7 +434,17 @@ async def get_roster_for_week(
             "stamina": snapshot.stamina,
             "freeThrows": snapshot.free_throws,
             "experience": snapshot.experience,
-            "archived": False
+            "archived": archived,
+            "snapshotWeek": snapshot_label,
         }
-        for snapshot in snapshots
-    ]
+
+    results = []
+    for s in snapshots:
+        is_archived = not s.player.active if s.player else True
+        results.append(_snapshot_to_dict(s, is_archived))
+    for s in archived_snapshots:
+        label = f"W{s.week_of_year} {s.year}"
+        results.append(_snapshot_to_dict(s, True, label))
+
+    results.sort(key=lambda x: x["name"] or "")
+    return results

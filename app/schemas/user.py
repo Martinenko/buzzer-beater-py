@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field
+from typing import List, Optional
 from uuid import UUID
 
 
@@ -24,3 +24,10 @@ class UserSearchResult(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class UserSearchResponse(BaseModel):
+    users: List[UserSearchResult]
+    has_more: bool = Field(alias="hasMore", default=False)
+
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)

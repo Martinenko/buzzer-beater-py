@@ -11,7 +11,7 @@ from app.models.team import Team
 from app.models.player import Player
 from app.models.player_share import PlayerShare
 from app.schemas.player_share import SharePlayerRequest, ShareResponse, PlayerShareDto, PlayerInShare, UpdateShareRequest
-from app.schemas.user import UserSearchResult
+from app.schemas.user import UserSearchResult, UserSearchResponse
 from app.routers.user import get_current_user_from_cookie, get_current_team_id_from_cookie
 
 router = APIRouter()
@@ -253,31 +253,34 @@ async def update_share(
     return {"success": True}
 
 
-@router.get("/users/search", response_model=List[UserSearchResult])
+@router.get("/users/search", response_model=UserSearchResponse)
 async def search_users(
-    q: str,
     request: Request,
+    q: str = "",
+    offset: int = 0,
+    limit: int = 20,
     db: AsyncSession = Depends(get_db)
 ):
     """Search for users to share with by public username"""
     current_user = await get_current_user_from_cookie(request, db)
 
-    if len(q) < 2:
-        return []
+    stmt = select(User).where(User.id != current_user.id)
 
-    # Search only by public username
-    stmt = (
-        select(User)
-        .where(
-            User.username.ilike(f"%{q}%"),
-            User.id != current_user.id
-        )
-        .limit(10)
-    )
+    if q:
+        stmt = stmt.where(User.username.ilike(f"%{q}%"))
+
+    stmt = stmt.order_by(User.username.asc()).offset(offset).limit(limit + 1)
+
     result = await db.execute(stmt)
     users = result.scalars().all()
 
-    return [
-        UserSearchResult(username=user.username, name=user.username)
-        for user in users
-    ]
+    has_more = len(users) > limit
+    users = users[:limit]
+
+    return UserSearchResponse(
+        users=[
+            UserSearchResult(username=user.username, name=user.username)
+            for user in users
+        ],
+        hasMore=has_more,
+    )
