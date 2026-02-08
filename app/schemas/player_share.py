@@ -61,5 +61,11 @@ class PlayerShareDto(BaseModel):
     recipient_username: str = Field(alias="recipientUsername")
     recipient_name: Optional[str] = Field(default=None, alias="recipientName")
     shared_at: datetime = Field(alias="sharedAt")
+    share_plan: bool = Field(default=False, alias="sharePlan")
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True, by_alias=True)
+
+
+class UpdateShareRequest(BaseModel):
+    share_plan: bool = Field(alias="sharePlan")
+    model_config = ConfigDict(populate_by_name=True)

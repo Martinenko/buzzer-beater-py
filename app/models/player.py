@@ -45,3 +45,4 @@ class Player(Base):
     current_team = relationship("Team", back_populates="players")
     shares = relationship("PlayerShare", back_populates="player")
     threads = relationship("PlayerThread", back_populates="player")
+    training_plan = relationship("PlayerTrainingPlan", back_populates="player", uselist=False)

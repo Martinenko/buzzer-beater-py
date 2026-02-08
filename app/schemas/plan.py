@@ -32,6 +32,7 @@ class PlanSkillsBase(BaseModel):
     stamina: Optional[int] = None
     free_throws: Optional[int] = None
     experience: Optional[int] = None
+    notes: Optional[str] = None
 
     @field_validator(
         "jump_shot", "jump_range", "outside_defense", "handling", "driving",
