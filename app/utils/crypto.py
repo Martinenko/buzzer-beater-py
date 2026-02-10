@@ -1,4 +1,4 @@
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import String
 from sqlalchemy.types import TypeDecorator
 
@@ -29,4 +29,9 @@ class EncryptedString(TypeDecorator):
     def process_result_value(self, value, dialect):
         if value is None:
             return None
-        return decrypt(value)
+        try:
+            return decrypt(value)
+        except InvalidToken:
+            # Handle data encrypted with old key or corrupted data
+            # Return None to indicate decryption failed
+            return None
