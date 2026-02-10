@@ -73,7 +73,8 @@ async def share_players(
             share = PlayerShare(
                 player_id=player.id,
                 owner_id=current_user.id,
-                recipient_id=recipient.id
+                recipient_id=recipient.id,
+                share_plan=share_request.share_plan,
             )
             db.add(share)
             shared_count += 1

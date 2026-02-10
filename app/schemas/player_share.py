@@ -13,6 +13,7 @@ class SharePlayerRequest(BaseModel):
     recipient_username: str = Field(alias="recipientUsername")
     player_ids: List[int] = Field(default=[], alias="playerIds")
     share_entire_team: bool = Field(default=False, alias="shareEntireTeam")
+    share_plan: bool = Field(default=False, alias="sharePlan")
 
     model_config = ConfigDict(populate_by_name=True)
 

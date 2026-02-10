@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str
+    encryption_key: str  # Fernet key for encrypting sensitive data at rest
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
 
