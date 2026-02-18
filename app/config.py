@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
 
+    # Redis
+    redis_url: str = ""  # Optional Redis URL for pub/sub (local: redis://localhost:6379)
+
     # CORS - include both local and production origins
     cors_origins: list[str] = [
         "http://localhost:4200",

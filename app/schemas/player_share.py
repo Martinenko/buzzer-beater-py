@@ -14,6 +14,7 @@ class SharePlayerRequest(BaseModel):
     player_ids: List[int] = Field(default=[], alias="playerIds")
     share_entire_team: bool = Field(default=False, alias="shareEntireTeam")
     share_plan: bool = Field(default=False, alias="sharePlan")
+    message: Optional[str] = Field(default=None)
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -52,6 +53,45 @@ class PlayerInShare(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True, by_alias=True)
 
 
+class PlayerSnapshotDto(BaseModel):
+    year: int
+    week_of_year: int = Field(alias="weekOfYear")
+
+    jump_shot: Optional[int] = Field(default=None, alias="jumpShot")
+    jump_range: Optional[int] = Field(default=None, alias="jumpRange")
+    outside_defense: Optional[int] = Field(default=None, alias="outsideDefense")
+    handling: Optional[int] = None
+    driving: Optional[int] = None
+    passing: Optional[int] = None
+    inside_shot: Optional[int] = Field(default=None, alias="insideShot")
+    inside_defense: Optional[int] = Field(default=None, alias="insideDefense")
+    rebounding: Optional[int] = None
+    shot_blocking: Optional[int] = Field(default=None, alias="shotBlocking")
+    stamina: Optional[int] = None
+    free_throws: Optional[int] = Field(default=None, alias="freeThrows")
+    experience: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, by_alias=True)
+
+
+class PlanTargets(BaseModel):
+    jump_shot: Optional[int] = Field(default=None, alias="jumpShot")
+    jump_range: Optional[int] = Field(default=None, alias="jumpRange")
+    outside_defense: Optional[int] = Field(default=None, alias="outsideDefense")
+    handling: Optional[int] = None
+    driving: Optional[int] = None
+    passing: Optional[int] = None
+    inside_shot: Optional[int] = Field(default=None, alias="insideShot")
+    inside_defense: Optional[int] = Field(default=None, alias="insideDefense")
+    rebounding: Optional[int] = None
+    shot_blocking: Optional[int] = Field(default=None, alias="shotBlocking")
+    stamina: Optional[int] = None
+    free_throws: Optional[int] = Field(default=None, alias="freeThrows")
+    experience: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, by_alias=True)
+
+
 class PlayerShareDto(BaseModel):
     share_id: UUID = Field(alias="shareId")
     player: PlayerInShare
@@ -63,6 +103,10 @@ class PlayerShareDto(BaseModel):
     recipient_name: Optional[str] = Field(default=None, alias="recipientName")
     shared_at: datetime = Field(alias="sharedAt")
     share_plan: bool = Field(default=False, alias="sharePlan")
+    message: Optional[str] = Field(default=None)
+    latest_snapshot: Optional[PlayerSnapshotDto] = Field(default=None, alias="latestSnapshot")
+    previous_snapshot: Optional[PlayerSnapshotDto] = Field(default=None, alias="previousSnapshot")
+    plan_targets: Optional[PlanTargets] = Field(default=None, alias="planTargets")
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True, by_alias=True)
 

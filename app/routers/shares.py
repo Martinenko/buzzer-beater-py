@@ -1,20 +1,81 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
 from sqlalchemy.orm import selectinload
 from typing import List
 from uuid import UUID
+from datetime import datetime
 
 from app.database import get_db
 from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
 from app.models.player_share import PlayerShare
-from app.schemas.player_share import SharePlayerRequest, ShareResponse, PlayerShareDto, PlayerInShare, UpdateShareRequest
+from app.models.player_snapshot import PlayerSnapshot
+from app.models.player_training_plan import PlayerTrainingPlan
+from app.models.user_thread import UserThread
+from app.models.user_message import UserMessage
+from app.schemas.player_share import SharePlayerRequest, ShareResponse, PlayerShareDto, PlayerInShare, UpdateShareRequest, PlayerSnapshotDto, PlanTargets
 from app.schemas.user import UserSearchResult, UserSearchResponse
 from app.routers.user import get_current_user_from_cookie, get_current_team_id_from_cookie
 
 router = APIRouter()
+
+
+def _snapshot_to_dto(snapshot: PlayerSnapshot | None) -> PlayerSnapshotDto | None:
+    if snapshot is None:
+        return None
+    return PlayerSnapshotDto(
+        year=snapshot.year,
+        week_of_year=snapshot.week_of_year,
+        jump_shot=snapshot.jump_shot,
+        jump_range=snapshot.jump_range,
+        outside_defense=snapshot.outside_defense,
+        handling=snapshot.handling,
+        driving=snapshot.driving,
+        passing=snapshot.passing,
+        inside_shot=snapshot.inside_shot,
+        inside_defense=snapshot.inside_defense,
+        rebounding=snapshot.rebounding,
+        shot_blocking=snapshot.shot_blocking,
+        stamina=snapshot.stamina,
+        free_throws=snapshot.free_throws,
+        experience=snapshot.experience,
+    )
+
+
+def _plan_to_targets(plan: PlayerTrainingPlan | None) -> PlanTargets | None:
+    if plan is None:
+        return None
+    return PlanTargets(
+        jump_shot=plan.jump_shot,
+        jump_range=plan.jump_range,
+        outside_defense=plan.outside_defense,
+        handling=plan.handling,
+        driving=plan.driving,
+        passing=plan.passing,
+        inside_shot=plan.inside_shot,
+        inside_defense=plan.inside_defense,
+        rebounding=plan.rebounding,
+        shot_blocking=plan.shot_blocking,
+        stamina=plan.stamina,
+        free_throws=plan.free_throws,
+        experience=plan.experience,
+    )
+
+
+async def _get_latest_snapshots(db: AsyncSession, player_id: UUID) -> tuple[PlayerSnapshot | None, PlayerSnapshot | None]:
+    stmt = (
+        select(PlayerSnapshot)
+        .where(PlayerSnapshot.player_id == player_id)
+        .order_by(PlayerSnapshot.year.desc(), PlayerSnapshot.week_of_year.desc())
+        .limit(2)
+    )
+    result = await db.execute(stmt)
+    snapshots = result.scalars().all()
+    latest = snapshots[0] if len(snapshots) > 0 else None
+    previous = snapshots[1] if len(snapshots) > 1 else None
+    return latest, previous
 
 
 @router.post("", response_model=ShareResponse)
@@ -75,11 +136,47 @@ async def share_players(
                 owner_id=current_user.id,
                 recipient_id=recipient.id,
                 share_plan=share_request.share_plan,
+                message=share_request.message,
             )
             db.add(share)
             shared_count += 1
 
     await db.commit()
+
+    # Create DM notification if players were shared
+    if shared_count > 0:
+        owner_name = current_user.username or current_user.login_name
+        team_name = team.name if team else "unknown"
+        
+        # Format players as markdown links with ID, one per line
+        players_list = "\n".join([f"• [{p.name} ({p.player_id})](/players/{p.player_id})" for p in players])
+        
+        notification_content = (
+            f"{owner_name} shared {shared_count} player{'s' if shared_count != 1 else ''} "
+            f"from {team_name} team with you:\n\n"
+            f"{players_list}"
+        )
+        if share_request.message:
+            notification_content += f"\n\nMessage: {share_request.message}"
+
+        # Get or create DM thread between the two users
+        a_id, b_id = (current_user.id, recipient.id) if str(current_user.id) < str(recipient.id) else (recipient.id, current_user.id)
+        stmt = select(UserThread).where(UserThread.user_a_id == a_id, UserThread.user_b_id == b_id)
+        result = await db.execute(stmt)
+        dm_thread = result.scalar_one_or_none()
+        if not dm_thread:
+            dm_thread = UserThread(user_a_id=a_id, user_b_id=b_id, is_active=True)
+            db.add(dm_thread)
+            await db.commit()
+            await db.refresh(dm_thread)
+
+        dm_msg = UserMessage(
+            thread_id=dm_thread.id,
+            sender_id=current_user.id,
+            content=notification_content,
+        )
+        db.add(dm_msg)
+        await db.commit()
 
     return ShareResponse(
         success=True,
@@ -107,8 +204,45 @@ async def get_received_shares(
     result = await db.execute(stmt)
     shares = result.scalars().all()
 
-    return [
-        PlayerShareDto(
+    # Prefetch teams to ensure ownerTeamId/Name are available even if relationship isn't loaded
+    team_ids = {s.player.current_team_id for s in shares if s.player and s.player.current_team_id}
+    owner_ids = {s.owner_id for s in shares}
+    team_map = {}
+    teams_by_owner = {}
+    teams_by_owner_name = {}
+    if team_ids or owner_ids:
+        team_query = select(Team).where(or_(Team.id.in_(team_ids), Team.coach_id.in_(owner_ids)))
+        team_result = await db.execute(team_query)
+        teams = team_result.scalars().all()
+        team_map = {t.id: t for t in teams}
+        for t in teams:
+            teams_by_owner.setdefault(t.coach_id, []).append(t)
+            teams_by_owner_name[(t.coach_id, t.name)] = t
+    def resolve_owner_team(share: PlayerShare) -> tuple[int | None, str | None]:
+        if share.player.current_team:
+            return share.player.current_team.team_id, share.player.current_team.name
+        if share.player.current_team_id and team_map.get(share.player.current_team_id):
+            team = team_map.get(share.player.current_team_id)
+            return team.team_id, team.name
+        if share.player.team_name and teams_by_owner_name.get((share.owner_id, share.player.team_name)):
+            team = teams_by_owner_name.get((share.owner_id, share.player.team_name))
+            return team.team_id, team.name
+        owner_teams = teams_by_owner.get(share.owner_id, [])
+        if len(owner_teams) == 1:
+            return owner_teams[0].team_id, owner_teams[0].name
+        return None, None
+
+    out: list[PlayerShareDto] = []
+    for share in shares:
+        team_id, team_name = resolve_owner_team(share)
+        latest_snapshot, previous_snapshot = await _get_latest_snapshots(db, share.player.id)
+        plan_targets = None
+        if share.share_plan:
+            plan_result = await db.execute(
+                select(PlayerTrainingPlan).where(PlayerTrainingPlan.player_id == share.player.id)
+            )
+            plan_targets = _plan_to_targets(plan_result.scalar_one_or_none())
+        out.append(PlayerShareDto(
             share_id=share.id,
             player=PlayerInShare(
                 id=share.player.id,
@@ -133,15 +267,19 @@ async def get_received_shares(
             ),
             owner_username=share.owner.username,
             owner_name=share.owner.username,
-            owner_team_name=share.player.current_team.name if share.player.current_team else None,
-            owner_team_id=share.player.current_team.team_id if share.player.current_team else None,
+            owner_team_name=team_name,
+            owner_team_id=team_id,
             recipient_username=current_user.username,
             recipient_name=current_user.username,
             shared_at=share.created_at,
             share_plan=share.share_plan,
-        )
-        for share in shares
-    ]
+            message=share.message,
+            latest_snapshot=_snapshot_to_dto(latest_snapshot),
+            previous_snapshot=_snapshot_to_dto(previous_snapshot),
+            plan_targets=plan_targets,
+        ))
+
+    return out
 
 
 @router.get("/sent", response_model=List[PlayerShareDto])
@@ -166,8 +304,44 @@ async def get_sent_shares(
     result = await db.execute(stmt)
     shares = result.scalars().all()
 
-    return [
-        PlayerShareDto(
+    team_ids = {s.player.current_team_id for s in shares if s.player and s.player.current_team_id}
+    owner_ids = {s.owner_id for s in shares}
+    team_map = {}
+    teams_by_owner = {}
+    teams_by_owner_name = {}
+    if team_ids or owner_ids:
+        team_query = select(Team).where(or_(Team.id.in_(team_ids), Team.coach_id.in_(owner_ids)))
+        team_result = await db.execute(team_query)
+        teams = team_result.scalars().all()
+        team_map = {t.id: t for t in teams}
+        for t in teams:
+            teams_by_owner.setdefault(t.coach_id, []).append(t)
+            teams_by_owner_name[(t.coach_id, t.name)] = t
+    def resolve_owner_team(share: PlayerShare) -> tuple[int | None, str | None]:
+        if share.player.current_team:
+            return share.player.current_team.team_id, share.player.current_team.name
+        if share.player.current_team_id and team_map.get(share.player.current_team_id):
+            team = team_map.get(share.player.current_team_id)
+            return team.team_id, team.name
+        if share.player.team_name and teams_by_owner_name.get((share.owner_id, share.player.team_name)):
+            team = teams_by_owner_name.get((share.owner_id, share.player.team_name))
+            return team.team_id, team.name
+        owner_teams = teams_by_owner.get(share.owner_id, [])
+        if len(owner_teams) == 1:
+            return owner_teams[0].team_id, owner_teams[0].name
+        return None, None
+
+    out: list[PlayerShareDto] = []
+    for share in shares:
+        team_id, team_name = resolve_owner_team(share)
+        latest_snapshot, previous_snapshot = await _get_latest_snapshots(db, share.player.id)
+        plan_targets = None
+        if share.share_plan:
+            plan_result = await db.execute(
+                select(PlayerTrainingPlan).where(PlayerTrainingPlan.player_id == share.player.id)
+            )
+            plan_targets = _plan_to_targets(plan_result.scalar_one_or_none())
+        out.append(PlayerShareDto(
             share_id=share.id,
             player=PlayerInShare(
                 id=share.player.id,
@@ -192,15 +366,19 @@ async def get_sent_shares(
             ),
             owner_username=current_user.username,
             owner_name=current_user.username,
-            owner_team_name=share.player.current_team.name if share.player.current_team else None,
-            owner_team_id=share.player.current_team.team_id if share.player.current_team else None,
+            owner_team_name=team_name,
+            owner_team_id=team_id,
             recipient_username=share.recipient.username,
             recipient_name=share.recipient.username,
             shared_at=share.created_at,
             share_plan=share.share_plan,
-        )
-        for share in shares
-    ]
+            message=share.message,
+            latest_snapshot=_snapshot_to_dto(latest_snapshot),
+            previous_snapshot=_snapshot_to_dto(previous_snapshot),
+            plan_targets=plan_targets,
+        ))
+
+    return out
 
 
 @router.delete("/{share_id}")

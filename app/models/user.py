@@ -23,3 +23,7 @@ class User(Base):
     threads_as_owner = relationship("PlayerThread", foreign_keys="PlayerThread.owner_id", back_populates="owner")
     threads_as_participant = relationship("PlayerThread", foreign_keys="PlayerThread.participant_id", back_populates="participant")
     player_messages = relationship("PlayerMessage", back_populates="sender")
+    # Direct messages
+    dm_threads_as_a = relationship("UserThread", foreign_keys="UserThread.user_a_id", back_populates="user_a")
+    dm_threads_as_b = relationship("UserThread", foreign_keys="UserThread.user_b_id", back_populates="user_b")
+    dm_messages = relationship("UserMessage", back_populates="sender")

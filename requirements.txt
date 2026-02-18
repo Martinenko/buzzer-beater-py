@@ -28,3 +28,4 @@ apscheduler==3.10.4
 
 # Development
 python-dotenv==1.0.0
+redis>=4.6.0

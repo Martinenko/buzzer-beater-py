@@ -13,11 +13,11 @@ def _to_camel(s: str) -> str:
 def _clamp_skill(v: Optional[int]) -> Optional[int]:
     if v is None:
         return None
-    return max(1, min(20, v))
+    return max(1, min(30, v))
 
 
 class PlanSkillsBase(BaseModel):
-    """Target skills 1–20. Omit or null = no target."""
+    """Target skills 1–30. Omit or null = no target."""
 
     jump_shot: Optional[int] = None
     jump_range: Optional[int] = None

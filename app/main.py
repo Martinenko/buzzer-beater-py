@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.routers import auth, players, plans, shares, teams, user, team, threads
+from app.routers import auth, players, plans, shares, teams, user, team, threads, dm, health
 from app.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -11,6 +11,8 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    from app.ws import init_redis
+    init_redis()
     start_scheduler()
     yield
     # Shutdown
@@ -44,6 +46,8 @@ app.include_router(players.router, prefix="/api/v1/players", tags=["Players"])
 app.include_router(shares.router, prefix="/api/v1/shares", tags=["Player Sharing"])
 app.include_router(threads.router, prefix="/api/v1/threads", tags=["Player Threads"])
 app.include_router(plans.router, prefix="/api/v1/plans", tags=["Training Plans"])
+app.include_router(dm.router, prefix="/api/v1/dm", tags=["Direct Messages"])
+app.include_router(health.router, prefix="/api/v1/health", tags=["Health"])
 
 
 @app.get("/health")

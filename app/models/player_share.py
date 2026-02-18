@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, UniqueConstraint, Uuid, Text
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
@@ -16,6 +16,7 @@ class PlayerShare(Base):
     owner_id = Column(Uuid, ForeignKey("users.id"), nullable=False)
     recipient_id = Column(Uuid, ForeignKey("users.id"), nullable=False)
     share_plan = Column(Boolean, default=False, nullable=False)
+    message = Column(Text, nullable=True)  # Optional message when sharing
 
     # Unique constraint - player can only be shared once with same recipient
     __table_args__ = (
