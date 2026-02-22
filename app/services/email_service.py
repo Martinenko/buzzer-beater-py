@@ -1,8 +1,6 @@
-import smtplib
+import requests
 import logging
-from email.message import EmailMessage
 from typing import Optional
-import time
 
 from app.config import get_settings
 
@@ -12,72 +10,83 @@ logger = logging.getLogger(__name__)
 class EmailService:
     def __init__(self):
         self.settings = get_settings()
-        # Retry configuration
         self.max_retries = 3
-        self.retry_delay = 2  # seconds
+        self.retry_delay = 1  # second
 
     def is_configured(self) -> bool:
         return bool(
-            self.settings.smtp_host
+            self.settings.brevo_api_key
             and self.settings.smtp_from_email
         )
 
     def send_email(self, to_email: str, subject: str, text_body: str, html_body: Optional[str] = None) -> None:
         if not self.is_configured():
-            raise RuntimeError("SMTP is not configured")
+            raise RuntimeError("Brevo is not configured")
 
-        message = EmailMessage()
-        message["Subject"] = subject
-        message["From"] = self.settings.smtp_from_email
-        message["To"] = to_email
-        message.set_content(text_body)
+        brevo_api_key = self.settings.brevo_api_key
+        from_email = self.settings.smtp_from_email
+
+        # Brevo API endpoint
+        url = "https://api.brevo.com/v3/smtp/email"
+
+        # Prepare request headers and body
+        headers = {
+            "accept": "application/json",
+            "api-key": brevo_api_key,
+            "content-type": "application/json",
+        }
+
+        payload = {
+            "sender": {
+                "name": "BB Scout",
+                "email": from_email
+            },
+            "to": [
+                {
+                    "email": to_email
+                }
+            ],
+            "subject": subject,
+            "textContent": text_body,
+        }
 
         if html_body:
-            message.add_alternative(html_body, subtype="html")
+            payload["htmlContent"] = html_body
 
+        # Retry logic
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                # Use port 587 for TLS (more compatible with cloud platforms)
-                # Fallback to 465 with SSL if port is explicitly 465
-                if self.settings.smtp_port == 587 or self.settings.smtp_use_tls:
-                    # TLS connection (port 587 recommended for cloud)
-                    with smtplib.SMTP(
-                        self.settings.smtp_host,
-                        self.settings.smtp_port or 587,
-                        timeout=30
-                    ) as server:
-                        server.starttls()
-                        if self.settings.smtp_username:
-                            server.login(self.settings.smtp_username, self.settings.smtp_password)
-                        server.send_message(message)
-                        logger.info(f"✅ Email sent to {to_email}")
-                        return
-                else:
-                    # SSL connection (port 465)
-                    with smtplib.SMTP_SSL(
-                        self.settings.smtp_host,
-                        self.settings.smtp_port or 465,
-                        timeout=30
-                    ) as server:
-                        if self.settings.smtp_username:
-                            server.login(self.settings.smtp_username, self.settings.smtp_password)
-                        server.send_message(message)
-                        logger.info(f"✅ Email sent to {to_email}")
-                        return
-            except Exception as e:
-                last_error = e
-                logger.warning(f"⚠️ Email send attempt {attempt + 1}/{self.max_retries} failed: {str(e)}")
-                if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay)
-                    continue
-                break
+                response = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=15
+                )
 
-        # If we get here, all retries failed
-        error_msg = f"Failed to send email after {self.max_retries} attempts: {str(last_error)}"
+                if response.status_code in [200, 201]:
+                    message_id = response.json().get('messageId', 'unknown')
+                    logger.info(f"✅ Email sent to {to_email} via Brevo (ID: {message_id})")
+                    return
+                else:
+                    last_error = f"HTTP {response.status_code}: {response.text}"
+                    logger.warning(f"⚠️ Brevo API attempt {attempt + 1}/{self.max_retries} failed: {last_error}")
+                    
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"⚠️ Email send attempt {attempt + 1}/{self.max_retries} failed: {last_error}")
+
+            if attempt < self.max_retries - 1:
+                import time
+                time.sleep(self.retry_delay)
+
+        # All retries failed
+        error_msg = f"Failed to send email after {self.max_retries} attempts: {last_error}"
         logger.error(f"❌ {error_msg}")
         raise RuntimeError(error_msg)
 
 
 email_service = EmailService()
+
+
 
