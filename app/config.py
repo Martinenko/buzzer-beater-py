@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = ""  # Optional Redis URL for pub/sub (local: redis://localhost:6379)
 
+    # Email notifications
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    smtp_from_email: str = ""
+    web_app_url: str = "https://bbscout.me"
+
     # CORS - include both local and production origins
     cors_origins: list[str] = [
         "http://localhost:4200",

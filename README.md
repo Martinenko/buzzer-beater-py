@@ -36,6 +36,19 @@ alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
+## Google Drive Backups (Railway)
+
+This project can run automated MySQL backups to Google Drive using `rclone`.
+
+Required env vars:
+- `RCLONE_CONFIG_B64`: Base64-encoded rclone config (preferred)
+- `RCLONE_REMOTE_NAME`: Remote name in the rclone config (default: `gdrive`)
+- `RCLONE_REMOTE_DIR`: Folder name in Drive (default: `bbscout-backups`)
+- `RCLONE_RETENTION_COUNT`: How many backups to keep (default: `7`)
+- `BACKUP_CRON_SCHEDULE`: Cron schedule in UTC (default: `0 3 * * *`)
+
+The backup script uses `DATABASE_URL` to connect and dumps the database daily.
+
 ## API Documentation
 
 Once running, visit:

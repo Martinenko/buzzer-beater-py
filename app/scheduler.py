@@ -9,6 +9,7 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
+from sqlalchemy import func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
@@ -16,11 +17,16 @@ from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
 from app.models.player_snapshot import PlayerSnapshot
+from app.models.user_message import UserMessage
+from app.models.user_thread import UserThread
 from app.services.bb_api import BBApiClient
+from app.services.email_service import email_service
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
+settings = get_settings()
 
 
 def get_current_bb_week() -> tuple[int, int]:
@@ -324,6 +330,88 @@ async def sync_all_rosters():
     logger.info(f"Scheduled sync complete: {total_teams} teams, {total_players} players synced")
 
 
+async def get_unread_dm_count_for_user(user: User, db: AsyncSession) -> int:
+    delay_minutes = user.unread_reminder_delay_min or 60
+    cutoff = datetime.utcnow() - timedelta(minutes=delay_minutes)
+
+    stmt = (
+        select(func.count(UserMessage.id))
+        .select_from(UserMessage)
+        .join(UserThread, UserThread.id == UserMessage.thread_id)
+        .where(
+            UserMessage.read_at.is_(None),
+            UserMessage.sender_id != user.id,
+            UserMessage.created_at <= cutoff,
+            or_(UserThread.user_a_id == user.id, UserThread.user_b_id == user.id),
+        )
+    )
+    result = await db.execute(stmt)
+    return int(result.scalar() or 0)
+
+
+async def send_unread_message_reminders():
+    """Send grouped unread DM reminders with cooldown (max once per 24h per user)."""
+    if not email_service.is_configured():
+        logger.info("Skipping unread reminders: SMTP not configured")
+        return
+
+    logger.info("Starting unread DM reminder job")
+    sent_count = 0
+
+    async with async_session() as db:
+        stmt = select(User).where(
+            User.unread_reminder_enabled == True,
+            User.email_verified == True,
+            User.email.isnot(None),
+        )
+        result = await db.execute(stmt)
+        users = result.scalars().all()
+
+        for user in users:
+            if user.last_unread_reminder_sent_at:
+                if user.last_unread_reminder_sent_at > datetime.utcnow() - timedelta(hours=24):
+                    continue
+
+            unread_count = await get_unread_dm_count_for_user(user, db)
+            if unread_count <= 0:
+                continue
+
+            open_url = f"{settings.web_app_url}/messages"
+            delay = user.unread_reminder_delay_min or 60
+            subject = f"You have {unread_count} unread message{'s' if unread_count != 1 else ''} on BB Scout"
+            text = (
+                f"Hi {user.username or user.login_name},\n\n"
+                f"You still have {unread_count} unread direct message{'s' if unread_count != 1 else ''} "
+                f"older than {delay} minutes.\n"
+                f"Open conversations: {open_url}\n\n"
+                "You can disable these reminders in your profile settings."
+            )
+            html = (
+                f"<p>Hi {user.username or user.login_name},</p>"
+                f"<p>You still have <strong>{unread_count}</strong> unread direct message"
+                f"{'s' if unread_count != 1 else ''} older than {delay} minutes.</p>"
+                f"<p><a href=\"{open_url}\">Open conversations</a></p>"
+                "<p>You can disable these reminders in your profile settings.</p>"
+            )
+
+            try:
+                await asyncio.to_thread(
+                    email_service.send_email,
+                    user.email,
+                    subject,
+                    text,
+                    html,
+                )
+                user.last_unread_reminder_sent_at = datetime.utcnow()
+                sent_count += 1
+            except Exception as exc:
+                logger.error(f"Failed to send reminder to {user.login_name}: {exc}")
+
+        await db.commit()
+
+    logger.info(f"Unread DM reminder job complete. Emails sent: {sent_count}")
+
+
 def start_scheduler():
     """Start the scheduler with Friday 1 PM CET job."""
     # CET is UTC+1 in winter, UTC+2 in summer (CEST)
@@ -342,8 +430,16 @@ def start_scheduler():
         replace_existing=True
     )
 
+    scheduler.add_job(
+        send_unread_message_reminders,
+        CronTrigger(minute='*/10', timezone='UTC'),
+        id='unread_dm_email_reminders',
+        name='Unread DM reminder emails',
+        replace_existing=True,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started - roster sync scheduled for every Friday at 13:00 CET")
+    logger.info("Scheduler started - roster sync weekly + unread DM reminders every 10 minutes")
 
 
 def stop_scheduler():

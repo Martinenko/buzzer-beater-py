@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, Uuid
+from sqlalchemy import Column, String, Boolean, Uuid, Integer, DateTime
 from sqlalchemy.orm import relationship
 import uuid
 from app.database import Base
@@ -15,6 +15,11 @@ class User(Base):
     name = Column(String(100), nullable=True)
     supporter = Column(Boolean, default=False)
     auto_sync_enabled = Column(Boolean, default=True)  # Enable automatic weekly roster sync
+    email = Column(String(255), nullable=True)
+    email_verified = Column(Boolean, default=False)
+    unread_reminder_enabled = Column(Boolean, default=False)
+    unread_reminder_delay_min = Column(Integer, default=60)
+    last_unread_reminder_sent_at = Column(DateTime, nullable=True)
 
     # Relationships
     teams = relationship("Team", back_populates="coach")

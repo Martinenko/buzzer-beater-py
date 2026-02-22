@@ -1,20 +1,28 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, Request, Cookie
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from typing import Optional, List
+from pydantic import BaseModel, EmailStr
 
 from app.database import get_db
 from app.config import get_settings
 from app.models.user import User
 from app.models.team import Team, TeamType
 from app.services.bb_api import BBApiClient
+from app.services.email_service import email_service
 
 router = APIRouter()
 settings = get_settings()
 
 TOKEN_COOKIE_NAME = "bb_session"
+EMAIL_VERIFY_TOKEN_TYPE = "email_verify"
+
+
+class EmailVerificationRequest(BaseModel):
+    email: EmailStr
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -22,6 +30,16 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+
+
+def create_email_verification_token(login_name: str, email: str) -> str:
+    expires = timedelta(hours=24)
+    payload = {
+        "sub": login_name,
+        "email": email,
+        "type": EMAIL_VERIFY_TOKEN_TYPE,
+    }
+    return create_access_token(payload, expires_delta=expires)
 
 
 async def get_current_user_from_cookie(
@@ -244,7 +262,11 @@ async def get_current_user_info(
     return {
         "username": user.username or user.login_name,
         "supporter": user.supporter or False,
-        "autoSyncEnabled": user.auto_sync_enabled or False
+        "autoSyncEnabled": user.auto_sync_enabled or False,
+        "email": user.email,
+        "emailVerified": user.email_verified or False,
+        "unreadReminderEnabled": user.unread_reminder_enabled or False,
+        "unreadReminderDelayMin": user.unread_reminder_delay_min or 60,
     }
 
 
@@ -256,8 +278,109 @@ async def get_user_settings(
     """Get current user settings"""
     user = await get_current_user_from_cookie(request, db)
     return {
-        "autoSyncEnabled": user.auto_sync_enabled or False
+        "autoSyncEnabled": user.auto_sync_enabled or False,
+        "email": user.email,
+        "emailVerified": user.email_verified or False,
+        "unreadReminderEnabled": user.unread_reminder_enabled or False,
+        "unreadReminderDelayMin": user.unread_reminder_delay_min or 60,
     }
+
+
+@router.post("/email/start-verification")
+async def start_email_verification(
+    body: EmailVerificationRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user_from_cookie(request, db)
+
+    if not email_service.is_configured():
+        raise HTTPException(status_code=503, detail="Email notifications are not configured")
+
+    user.email = body.email
+    user.email_verified = False
+
+    token = create_email_verification_token(user.login_name, body.email)
+    verify_url = f"{settings.web_app_url}/api/v1/user/email/verify?token={token}"
+
+    text = (
+        "Hi,\n\n"
+        "Please verify your email to enable unread message reminders.\n"
+        f"Verify link: {verify_url}\n\n"
+        "If you did not request this, you can ignore this message."
+    )
+    html = (
+        "<div style=\"font-family: Arial, sans-serif; padding:16px; color:#111827;\">"
+        "  <h2 style=\"margin:0 0 12px;\">Verify your email</h2>"
+        "  <p style=\"margin:0 0 16px;\">"
+        "    Please verify your email to enable unread message reminders."
+        "  </p>"
+        "  <p style=\"margin:0 0 16px;\">"
+        f"    <a href=\"{verify_url}\" style=\"background:#2563eb;color:#ffffff;"
+        "text-decoration:none;padding:10px 16px;border-radius:6px;display:inline-block;\">"
+        "Verify email</a>"
+        "  </p>"
+        "  <p style=\"margin:0 0 8px; font-size:12px; color:#6b7280;\">"
+        "    If the button does not work, copy and paste this link:"
+        "  </p>"
+        f"  <p style=\"margin:0 0 16px; font-size:12px;\">{verify_url}</p>"
+        "  <p style=\"margin:0; font-size:12px; color:#6b7280;\">"
+        "    If you did not request this, you can ignore this message."
+        "  </p>"
+        "</div>"
+    )
+
+    try:
+        email_service.send_email(
+            to_email=body.email,
+            subject="Verify your BB Scout email",
+            text_body=text,
+            html_body=html,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to send verification email: {exc}")
+
+    await db.commit()
+    return {"success": True, "message": "Verification email sent"}
+
+
+@router.get("/email/verify")
+async def verify_email(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    if payload.get("type") != EMAIL_VERIFY_TOKEN_TYPE:
+        raise HTTPException(status_code=400, detail="Invalid token type")
+
+    login_name = payload.get("sub")
+    email = payload.get("email")
+    if not login_name or not email:
+        raise HTTPException(status_code=400, detail="Invalid token payload")
+
+    stmt = select(User).where(User.login_name == login_name)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.email != email:
+        raise HTTPException(status_code=400, detail="Email does not match current user email")
+
+    user.email_verified = True
+    if user.unread_reminder_delay_min is None:
+        user.unread_reminder_delay_min = 60
+
+    await db.commit()
+
+    return RedirectResponse(
+        url=f"{settings.web_app_url}/login?verified=1",
+        status_code=302
+    )
 
 
 @router.post("/settings")
@@ -272,9 +395,34 @@ async def update_user_settings(
     if autoSyncEnabled is not None:
         user.auto_sync_enabled = autoSyncEnabled
 
+    unreadReminderEnabled = request.query_params.get("unreadReminderEnabled")
+    unreadReminderDelayMin = request.query_params.get("unreadReminderDelayMin")
+    email = request.query_params.get("email")
+
+    if email is not None:
+        normalized_email = email.strip().lower()
+        user.email = normalized_email or None
+        user.email_verified = False if normalized_email else False
+
+    if unreadReminderEnabled is not None:
+        user.unread_reminder_enabled = unreadReminderEnabled.lower() == "true"
+
+    if unreadReminderDelayMin is not None:
+        try:
+            delay = int(unreadReminderDelayMin)
+            if delay not in (30, 60, 180):
+                raise ValueError()
+            user.unread_reminder_delay_min = delay
+        except ValueError:
+            raise HTTPException(status_code=400, detail="unreadReminderDelayMin must be one of: 30, 60, 180")
+
     await db.commit()
 
     return {
         "success": True,
-        "autoSyncEnabled": user.auto_sync_enabled or False
+        "autoSyncEnabled": user.auto_sync_enabled or False,
+        "email": user.email,
+        "emailVerified": user.email_verified or False,
+        "unreadReminderEnabled": user.unread_reminder_enabled or False,
+        "unreadReminderDelayMin": user.unread_reminder_delay_min or 60,
     }
