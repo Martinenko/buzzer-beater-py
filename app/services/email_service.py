@@ -12,12 +12,19 @@ class EmailService:
         self.settings = get_settings()
         self.max_retries = 3
         self.retry_delay = 1  # second
+        
+        # Debug logging
+        logger.info(f"📧 Brevo API Key configured: {bool(self.settings.brevo_api_key)}")
+        logger.info(f"📧 SMTP From Email configured: {bool(self.settings.smtp_from_email)}")
 
     def is_configured(self) -> bool:
-        return bool(
+        configured = bool(
             self.settings.brevo_api_key
             and self.settings.smtp_from_email
         )
+        if not configured:
+            logger.warning(f"⚠️ Email not configured - API Key: {bool(self.settings.brevo_api_key)}, From Email: {bool(self.settings.smtp_from_email)}")
+        return configured
 
     def send_email(self, to_email: str, subject: str, text_body: str, html_body: Optional[str] = None) -> None:
         if not self.is_configured():
