@@ -1,15 +1,15 @@
 """Add match boxscore tables
 
-Revision ID: 012
-Revises: 011
+Revision ID: 019
+Revises: 018
 Create Date: 2026-02-24
 
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "012"
-down_revision = "011"
+revision = "019"
+down_revision = "018"
 branch_labels = None
 depends_on = None
 
