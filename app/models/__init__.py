@@ -7,6 +7,8 @@ from app.models.player_thread import PlayerThread
 from app.models.player_message import PlayerMessage
 from app.models.user_thread import UserThread
 from app.models.user_message import UserMessage
+from app.models.schedule_match import ScheduleMatch
+from app.models.match_boxscore import MatchBoxscore, MatchTeamBoxscore, MatchPlayerBoxscore
 
 __all__ = [
 	"User",
@@ -18,4 +20,8 @@ __all__ = [
 	"PlayerMessage",
 	"UserThread",
 	"UserMessage",
+	"ScheduleMatch",
+	"MatchBoxscore",
+	"MatchTeamBoxscore",
+	"MatchPlayerBoxscore",
 ]

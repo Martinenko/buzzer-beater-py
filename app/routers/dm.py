@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, update
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict
-from datetime import datetime
+from datetime import datetime, timezone
+import asyncio
+import json
 
 from app.database import get_db
 from app.models.user import User
@@ -176,94 +179,6 @@ async def create_or_get_dm(request: Request, body: CreateDmRequest, db: AsyncSes
     )
 
 
-@router.get("/{thread_id}", response_model=ThreadDetailDto)
-async def get_dm(thread_id: UUID, request: Request, db: AsyncSession = Depends(get_db)):
-    current_user = await get_current_user_from_cookie(request, db)
-
-    stmt = select(UserThread).options(selectinload(UserThread.messages).selectinload(UserMessage.sender), selectinload(UserThread.user_a), selectinload(UserThread.user_b)).where(UserThread.id == thread_id)
-    result = await db.execute(stmt)
-    thread = result.scalar_one_or_none()
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    # ensure user is participant
-    if current_user.id not in (thread.user_a_id, thread.user_b_id):
-        raise HTTPException(status_code=403, detail="Not a participant in this thread")
-
-    other = thread.user_a if thread.user_a_id != current_user.id else thread.user_b
-
-    # mark messages read
-    stmt = (
-        update(UserMessage)
-        .where(UserMessage.thread_id == thread.id, UserMessage.sender_id != current_user.id, UserMessage.read_at.is_(None))
-        .values(read_at=datetime.utcnow())
-    )
-    await db.execute(stmt)
-    await db.commit()
-
-    # reload messages
-    stmt = select(UserThread).options(selectinload(UserThread.messages).selectinload(UserMessage.sender), selectinload(UserThread.user_a), selectinload(UserThread.user_b)).where(UserThread.id == thread_id)
-    result = await db.execute(stmt)
-    thread = result.scalar_one()
-
-    return ThreadDetailDto(
-        id=thread.id,
-        participant_id=other.id,
-        participant_username=other.username or other.login_name,
-        is_active=thread.is_active,
-        messages=[_make_message_dto(m, current_user.id) for m in thread.messages],
-    )
-
-
-@router.post("/{thread_id}/messages", response_model=MessageDto)
-async def send_dm(thread_id: UUID, body: SendDmRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    current_user = await get_current_user_from_cookie(request, db)
-
-    stmt = select(UserThread).where(UserThread.id == thread_id)
-    result = await db.execute(stmt)
-    thread = result.scalar_one_or_none()
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    if current_user.id not in (thread.user_a_id, thread.user_b_id):
-        raise HTTPException(status_code=403, detail="Not a participant in this thread")
-
-    msg = UserMessage(thread_id=thread.id, sender_id=current_user.id, content=body.content)
-    db.add(msg)
-    # update thread updated_at
-    thread.updated_at = datetime.utcnow()
-    await db.commit()
-    await db.refresh(msg)
-
-    # Notify other participant via websocket (if connected)
-    other_id = thread.user_a_id if thread.user_a_id != current_user.id else thread.user_b_id
-    payload = {
-        "event": "dm:new_message",
-        "threadId": str(thread.id),
-        "message": {
-            "id": str(msg.id),
-            "content": msg.content,
-            "senderId": str(msg.sender_id),
-            "senderUsername": current_user.username or current_user.login_name,
-            "createdAt": msg.created_at.isoformat(),
-        }
-    }
-    # fire and forget
-    try:
-        await manager.send_json_to_user(str(other_id), payload)
-    except Exception:
-        pass
-    # publish to Redis so other instances can forward to their connected sockets
-    try:
-        await manager.publish('dm:events', {'target_user_id': str(other_id), 'payload': payload})
-    except Exception:
-        # non-fatal
-        pass
-
-    return _make_message_dto(msg, current_user.id)
-
-
-
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
     """WebSocket endpoint for receiving DM events. Authenticates using session cookie."""
@@ -301,3 +216,121 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
         await manager.disconnect(user_id, websocket)
     except Exception:
         await manager.disconnect(user_id, websocket)
+
+
+@router.get("/events")
+async def sse_events(request: Request, db: AsyncSession = Depends(get_db)):
+    """Server-Sent Events endpoint for DM notifications. Works through Netlify proxy."""
+    current_user = await get_current_user_from_cookie(request, db)
+    user_id = str(current_user.id)
+
+    async def event_generator():
+        # Send initial connection confirmation
+        yield f"data: {json.dumps({'event': 'connected', 'userId': user_id})}\n\n"
+        
+        # Keep connection alive and listen for events from manager
+        try:
+            while True:
+                # Check if there are new messages for this user
+                # This is a simplified approach - in production you'd use Redis pub/sub
+                await asyncio.sleep(2)  # Heartbeat every 2 seconds
+                yield f": heartbeat\n\n"
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable buffering in nginx
+        }
+    )
+
+
+@router.get("/{thread_id}", response_model=ThreadDetailDto)
+async def get_dm(thread_id: UUID, request: Request, db: AsyncSession = Depends(get_db)):
+    current_user = await get_current_user_from_cookie(request, db)
+
+    stmt = select(UserThread).options(selectinload(UserThread.messages).selectinload(UserMessage.sender), selectinload(UserThread.user_a), selectinload(UserThread.user_b)).where(UserThread.id == thread_id)
+    result = await db.execute(stmt)
+    thread = result.scalar_one_or_none()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # ensure user is participant
+    if current_user.id not in (thread.user_a_id, thread.user_b_id):
+        raise HTTPException(status_code=403, detail="Not a participant in this thread")
+
+    other = thread.user_a if thread.user_a_id != current_user.id else thread.user_b
+
+    # mark messages read
+    stmt = (
+        update(UserMessage)
+        .where(UserMessage.thread_id == thread.id, UserMessage.sender_id != current_user.id, UserMessage.read_at.is_(None))
+        .values(read_at=datetime.now(timezone.utc))
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+    # reload messages
+    stmt = select(UserThread).options(selectinload(UserThread.messages).selectinload(UserMessage.sender), selectinload(UserThread.user_a), selectinload(UserThread.user_b)).where(UserThread.id == thread_id)
+    result = await db.execute(stmt)
+    thread = result.scalar_one()
+
+    return ThreadDetailDto(
+        id=thread.id,
+        participant_id=other.id,
+        participant_username=other.username or other.login_name,
+        is_active=thread.is_active,
+        messages=[_make_message_dto(m, current_user.id) for m in thread.messages],
+    )
+
+
+@router.post("/{thread_id}/messages", response_model=MessageDto)
+async def send_dm(thread_id: UUID, body: SendDmRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    current_user = await get_current_user_from_cookie(request, db)
+
+    stmt = select(UserThread).where(UserThread.id == thread_id)
+    result = await db.execute(stmt)
+    thread = result.scalar_one_or_none()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if current_user.id not in (thread.user_a_id, thread.user_b_id):
+        raise HTTPException(status_code=403, detail="Not a participant in this thread")
+
+    msg = UserMessage(thread_id=thread.id, sender_id=current_user.id, content=body.content)
+    db.add(msg)
+    # update thread updated_at
+    thread.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(msg)
+
+    # Notify other participant via websocket (if connected)
+    other_id = thread.user_a_id if thread.user_a_id != current_user.id else thread.user_b_id
+    payload = {
+        "event": "dm:new_message",
+        "threadId": str(thread.id),
+        "message": {
+            "id": str(msg.id),
+            "content": msg.content,
+            "senderId": str(msg.sender_id),
+            "senderUsername": current_user.username or current_user.login_name,
+            "createdAt": msg.created_at.isoformat(),
+        }
+    }
+    # fire and forget
+    try:
+        await manager.send_json_to_user(str(other_id), payload)
+    except Exception:
+        pass
+    # publish to Redis so other instances can forward to their connected sockets
+    try:
+        await manager.publish('dm:events', {'target_user_id': str(other_id), 'payload': payload})
+    except Exception:
+        # non-fatal
+        pass
+
+    return _make_message_dto(msg, current_user.id)

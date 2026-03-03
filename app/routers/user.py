@@ -11,6 +11,7 @@ from app.database import get_db
 from app.config import get_settings
 from app.models.user import User
 from app.models.team import Team, TeamType
+from app.models.season import Season
 from app.services.bb_api import BBApiClient
 from app.services.email_service import email_service
 
@@ -183,7 +184,52 @@ async def login(
         samesite="lax"
     )
 
+    try:
+        await _sync_seasons_from_bb(user.bb_key, user.login_name, db)
+    except Exception as seasons_sync_error:
+        print(f"WARN login: failed to sync seasons from BB API: {seasons_sync_error}")
+
     return {"success": True, "message": "Login successful"}
+
+
+async def _sync_seasons_from_bb(bb_key: str, login_name: str, db: AsyncSession) -> None:
+    """Fetch seasons from BB API and upsert into seasons table.
+    Best-effort: failures should not block login flow.
+    """
+    if not bb_key:
+        return
+
+    bb_client = BBApiClient(bb_key)
+    seasons_data = await bb_client.get_seasons(username=login_name)
+    if not seasons_data:
+        return
+
+    def _parse_bb_date(value: Optional[str]):
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+
+    for season_data in seasons_data:
+        season_number = season_data.get("number")
+        if season_number is None:
+            continue
+
+        stmt = select(Season).where(Season.number == season_number)
+        existing = (await db.execute(stmt)).scalar_one_or_none()
+
+        start_date = _parse_bb_date(season_data.get("startDate"))
+        end_date = _parse_bb_date(season_data.get("endDate"))
+
+        if existing:
+            existing.start_date = start_date
+            existing.end_date = end_date
+        else:
+            db.add(Season(number=season_number, start_date=start_date, end_date=end_date))
+
+    await db.commit()
 
 
 @router.get("/teams")

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.routers import auth, players, plans, shares, teams, user, team, threads, dm, health
+from app.routers import auth, players, plans, shares, teams, user, team, threads, dm, health, seasons
 from app.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -38,6 +38,7 @@ app.add_middleware(
 # New routers matching Spring API paths (for Angular compatibility)
 app.include_router(user.router, prefix="/api/v1/user", tags=["User"])
 app.include_router(team.router, prefix="/api/v1/team", tags=["Team"])
+app.include_router(seasons.router, prefix="/api/v1", tags=["Seasons"])
 
 # Original routers (keep for backwards compatibility)
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])

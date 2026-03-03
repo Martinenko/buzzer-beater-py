@@ -34,6 +34,10 @@ class PlayerInShare(BaseModel):
     age: Optional[int] = None
     potential: int = 0
     best_position: Optional[str] = Field(default=None, alias="bestPosition")
+    salary: Optional[int] = None
+    dmi: Optional[int] = None
+    game_shape: Optional[int] = Field(default=None, alias="gameShape")
+    active: bool = True
 
     # Skills - using camelCase aliases
     jump_shot: Optional[int] = Field(default=None, alias="jumpShot")
