@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, delete
 from sqlalchemy.exc import SQLAlchemyError
@@ -309,9 +309,9 @@ async def sync_roster(
 async def _fetch_boxscores_background(match_ids: List[int], bb_key: str, login_name: str, current_team_id: int, is_utopia: bool):
     """Background task to fetch boxscores for multiple matches and update database."""
     global fetch_state
-    
+
     fetch_state["in_progress"] = True
-    fetch_state["total_matches"] = len(match_ids)
+    fetch_state["total_matches"] = 0
     fetch_state["fetched_count"] = 0
     fetch_state["current_match_id"] = None
     fetch_state["current_match_name"] = None
@@ -322,9 +322,26 @@ async def _fetch_boxscores_background(match_ids: List[int], bb_key: str, login_n
         from app.database import async_session
         
         async with async_session() as db:
+            existing_boxscore_ids = set()
+            if match_ids:
+                existing_boxscore_ids = set(
+                    (
+                        await db.execute(
+                            select(MatchBoxscore.match_id).where(MatchBoxscore.match_id.in_(match_ids))
+                        )
+                    ).scalars().all()
+                )
+
+            pending_match_ids = [match_id for match_id in match_ids if match_id not in existing_boxscore_ids]
+            fetch_state["total_matches"] = len(pending_match_ids)
+
+            if not pending_match_ids:
+                fetch_state["fetched_count"] = 0
+                return
+
             bb_client = BBApiClient(bb_key)
             
-            for i, match_id in enumerate(match_ids):
+            for i, match_id in enumerate(pending_match_ids):
                 # Re-fetch match from database in this session
                 match = await db.get(ScheduleMatch, match_id)
                 if not match:
@@ -410,7 +427,7 @@ async def _fetch_opponent_boxscores_background(match_ids: List[int], bb_key: str
     global fetch_state
 
     fetch_state["in_progress"] = True
-    fetch_state["total_matches"] = len(match_ids)
+    fetch_state["total_matches"] = 0
     fetch_state["fetched_count"] = 0
     fetch_state["current_match_id"] = None
     fetch_state["current_match_name"] = None
@@ -419,9 +436,26 @@ async def _fetch_opponent_boxscores_background(match_ids: List[int], bb_key: str
         from app.database import async_session
 
         async with async_session() as db:
+            existing_boxscore_ids = set()
+            if match_ids:
+                existing_boxscore_ids = set(
+                    (
+                        await db.execute(
+                            select(MatchBoxscore.match_id).where(MatchBoxscore.match_id.in_(match_ids))
+                        )
+                    ).scalars().all()
+                )
+
+            pending_match_ids = [match_id for match_id in match_ids if match_id not in existing_boxscore_ids]
+            fetch_state["total_matches"] = len(pending_match_ids)
+
+            if not pending_match_ids:
+                fetch_state["fetched_count"] = 0
+                return
+
             bb_client = BBApiClient(bb_key)
 
-            for i, match_id in enumerate(match_ids):
+            for i, match_id in enumerate(pending_match_ids):
                 fetch_state["current_match_id"] = match_id
                 fetch_state["current_match_name"] = f"Match #{match_id}"
                 fetch_state["fetched_count"] = i
@@ -492,7 +526,7 @@ async def _fetch_opponent_boxscores_background(match_ids: List[int], bb_key: str
                     except Exception as commit_err:
                         print(f"Error committing opponent fetch fallback for match {match_id}: {commit_err}")
 
-            fetch_state["fetched_count"] = len(match_ids)
+            fetch_state["fetched_count"] = len(pending_match_ids)
     except Exception as e:
         print(f"Error in opponent background boxscore fetch: {e}")
     finally:
@@ -653,12 +687,14 @@ async def get_fetch_status(
 async def get_schedule_match_detail(
     match_id: int,
     request: Request,
+    team_id: Optional[int] = Query(None, alias="teamId"),
     refresh: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
     """Get full boxscore details for a single match, cached in DB."""
     user = await get_current_user_from_cookie(request, db)
     current_team_id = await get_current_team_id_from_cookie(request)
+    target_team_id = team_id or current_team_id
     team_type = get_current_team_type_from_cookie(request)
     is_utopia = (team_type == "UTOPIA")
 
@@ -667,11 +703,13 @@ async def get_schedule_match_detail(
 
     stmt = select(ScheduleMatch).where(
         ScheduleMatch.match_id == match_id,
-        ScheduleMatch.team_id == current_team_id
+        or_(
+            ScheduleMatch.team_id == target_team_id,
+            ScheduleMatch.home_team_id == target_team_id,
+            ScheduleMatch.away_team_id == target_team_id,
+        )
     )
     schedule_match = (await db.execute(stmt)).scalar_one_or_none()
-    if not schedule_match:
-        raise HTTPException(status_code=404, detail="Match not found for current team")
 
     def build_response(boxscore: MatchBoxscore, teams: list[MatchTeamBoxscore], players: list[MatchPlayerBoxscore]):
         team_map = {"home": None, "away": None}
@@ -889,8 +927,12 @@ async def get_schedule_match_detail(
         try:
             await _store_boxscore_details(db, match_id, details)
             await db.commit()
+            boxscore = await db.get(MatchBoxscore, match_id)
         except SQLAlchemyError as e:
             print(f"WARN schedule/match: failed to store boxscore ({e}); returning live data")
+            return build_response_from_details(details)
+
+        if not boxscore:
             return build_response_from_details(details)
 
     teams = (await db.execute(select(MatchTeamBoxscore).where(MatchTeamBoxscore.match_id == match_id))).scalars().all()
@@ -1233,6 +1275,7 @@ async def get_schedule(
     match_ids = [m.match_id for m in matches]
     boxscore_teams_by_match = {}
     boxscore_effort_delta_by_match = {}
+    existing_boxscore_match_ids = set()
     if match_ids:
         try:
             boxscore_rows = (
@@ -1241,6 +1284,7 @@ async def get_schedule(
                 )
             ).scalars().all()
             for box_row in boxscore_rows:
+                existing_boxscore_match_ids.add(box_row.match_id)
                 boxscore_effort_delta_by_match[box_row.match_id] = box_row.effort_delta
 
             team_rows = (
@@ -1272,6 +1316,9 @@ async def get_schedule(
 
         if match_time is None or match_time > now:
             continue
+
+        if match.match_id in existing_boxscore_match_ids:
+            continue
         
         # Skip if we have all the data we need
         if match.details_retrieved_at is not None and match.my_off_strategy is not None and match.my_def_strategy is not None:
@@ -1292,6 +1339,8 @@ async def get_schedule(
         ScheduleMatch.away_score.isnot(None),
         ScheduleMatch.boxscore_fetched == False  # Haven't attempted fetch yet
     )
+    if existing_boxscore_match_ids:
+        stmt_old = stmt_old.where(~ScheduleMatch.match_id.in_(existing_boxscore_match_ids))
     if type_filters:
         stmt_old = stmt_old.where(or_(*type_filters))
     
@@ -1309,7 +1358,7 @@ async def get_schedule(
     if matches_needing_boxscore and not fetch_state["in_progress"]:
         # Extract just the match IDs to avoid serialization issues with SQLAlchemy objects
         # Also extract only the user data we need (not the User object itself which gets detached)
-        match_ids = [m.match_id for m in matches_needing_boxscore]
+        match_ids = list(dict.fromkeys(m.match_id for m in matches_needing_boxscore if m.match_id is not None))
         asyncio.create_task(_fetch_boxscores_background(
             match_ids,
             user.bb_key,
