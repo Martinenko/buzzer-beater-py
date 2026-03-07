@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.routers import auth, players, plans, shares, teams, user, team, threads, dm, health, seasons
+from app.routers import auth, players, plans, shares, teams, user, team, threads, dm, health, seasons, admin, nt
 from app.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -49,6 +49,8 @@ app.include_router(threads.router, prefix="/api/v1/threads", tags=["Player Threa
 app.include_router(plans.router, prefix="/api/v1/plans", tags=["Training Plans"])
 app.include_router(dm.router, prefix="/api/v1/dm", tags=["Direct Messages"])
 app.include_router(health.router, prefix="/api/v1/health", tags=["Health"])
+app.include_router(admin.router, prefix="/api/v1", tags=["Admin"])
+app.include_router(nt.router, prefix="/api/v1", tags=["NT"])
 
 
 @app.get("/health")

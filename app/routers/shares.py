@@ -28,6 +28,7 @@ def _snapshot_to_dto(snapshot: PlayerSnapshot | None) -> PlayerSnapshotDto | Non
     return PlayerSnapshotDto(
         year=snapshot.year,
         week_of_year=snapshot.week_of_year,
+        played_nt_match=snapshot.played_nt_match,
         jump_shot=snapshot.jump_shot,
         jump_range=snapshot.jump_range,
         outside_defense=snapshot.outside_defense,

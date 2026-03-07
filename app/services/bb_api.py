@@ -439,12 +439,11 @@ class BBApiClient:
 
     async def get_boxscore(self, match_id: int, username: str = None, is_utopia: bool = False) -> Dict[str, Any]:
         """Get match boxscore and extract full match details."""
-        if not self.bb_key:
+        if not self.bb_key and username:
             raise ValueError("BB key required for this operation")
 
         async with httpx.AsyncClient(verify=settings.bb_api_verify_ssl) as client:
-            # First establish session by calling login
-            if username:
+            if username and self.bb_key:
                 login_params = {"login": username, "code": self.bb_key}
                 if is_utopia:
                     login_params["secondteam"] = "1"
@@ -458,15 +457,14 @@ class BBApiClient:
                 params={"matchid": match_id}
             )
             root = self._parse_xml(response.text)
-            
-            # Check for error response
+
             error = root.find(".//error")
             if error is not None:
                 error_msg = error.text or "Unknown error"
                 if "NotAuthorised" in error_msg or "not authorized" in error_msg.lower():
                     return {"error": "NotAuthorised", "message": error_msg}
                 return {"error": error_msg, "message": error_msg}
-            
+
             match = root.find(".//match")
             if match is None:
                 return {}
@@ -496,28 +494,24 @@ class BBApiClient:
                 pace_elem = gdp.find("pace") if gdp is not None else None
 
                 def parse_gdp_value(elem: Optional[etree._Element]) -> tuple[Optional[str], Optional[bool]]:
-                    """Parse GDP element which may contain value + '.hit|miss' suffix.
-                    Examples: 'Balanced.hit' → ('Balanced', True), 'outside.miss' → ('Outside', False), 'Slow' → ('Slow', None), 'N/A' → (None, None)
-                    """
                     if elem is None or elem.text is None:
                         return None, None
-                    
+
                     text = elem.text.strip()
                     if text == 'N/A':
                         return None, None
-                    
+
                     is_hit = None
                     if text.endswith('.hit'):
                         is_hit = True
-                        text = text[:-4]  # Remove '.hit' suffix
+                        text = text[:-4]
                     elif text.endswith('.miss'):
                         is_hit = False
-                        text = text[:-5]  # Remove '.miss' suffix
-                    
-                    # Normalize text to proper case for focus values (outside → Outside, etc.)
+                        text = text[:-5]
+
                     if text:
                         text = text.capitalize()
-                    
+
                     return text if text else None, is_hit
 
                 focus_value, focus_hit = parse_gdp_value(focus_elem)

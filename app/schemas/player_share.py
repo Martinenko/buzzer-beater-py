@@ -60,6 +60,7 @@ class PlayerInShare(BaseModel):
 class PlayerSnapshotDto(BaseModel):
     year: int
     week_of_year: int = Field(alias="weekOfYear")
+    played_nt_match: bool = Field(default=False, alias="playedNtMatch")
 
     jump_shot: Optional[int] = Field(default=None, alias="jumpShot")
     jump_range: Optional[int] = Field(default=None, alias="jumpRange")

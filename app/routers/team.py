@@ -14,6 +14,7 @@ from app.models.player import Player
 from app.models.player_snapshot import PlayerSnapshot
 from app.models.schedule_match import ScheduleMatch
 from app.models.match_boxscore import MatchBoxscore, MatchTeamBoxscore, MatchPlayerBoxscore
+from app.models.nt_match_boxscore import NTMatchBoxscore, NTMatchTeamBoxscore, NTMatchPlayerBoxscore
 from app.services.bb_api import BBApiClient
 from app.schemas.team import ScheduleResponse
 from app.routers.user import get_current_user_from_cookie, get_current_team_id_from_cookie, get_current_team_type_from_cookie
@@ -695,11 +696,9 @@ async def get_schedule_match_detail(
     user = await get_current_user_from_cookie(request, db)
     current_team_id = await get_current_team_id_from_cookie(request)
     target_team_id = team_id or current_team_id
+    is_opponent_request = team_id is not None
     team_type = get_current_team_type_from_cookie(request)
     is_utopia = (team_type == "UTOPIA")
-
-    if not user.bb_key:
-        raise HTTPException(status_code=400, detail="BB key not available")
 
     stmt = select(ScheduleMatch).where(
         ScheduleMatch.match_id == match_id,
@@ -766,6 +765,122 @@ async def get_schedule_match_detail(
                 },
             }
 
+            key = "home" if team.is_home else "away"
+            team_map[key] = team_payload
+
+        for player in players:
+            team_key = None
+            if team_map["home"] and player.team_id == team_map["home"]["teamId"]:
+                team_key = "home"
+            elif team_map["away"] and player.team_id == team_map["away"]["teamId"]:
+                team_key = "away"
+
+            if team_key is None:
+                continue
+
+            team_map[team_key]["boxscore"]["players"].append({
+                "playerId": player.player_id,
+                "firstName": player.first_name,
+                "lastName": player.last_name,
+                "isStarter": player.is_starter,
+                "minutes": {
+                    "pg": player.minutes_pg,
+                    "sg": player.minutes_sg,
+                    "sf": player.minutes_sf,
+                    "pf": player.minutes_pf,
+                    "c": player.minutes_c,
+                },
+                "performance": {
+                    "fgm": player.fgm,
+                    "fga": player.fga,
+                    "tpm": player.tpm,
+                    "tpa": player.tpa,
+                    "ftm": player.ftm,
+                    "fta": player.fta,
+                    "oreb": player.oreb,
+                    "reb": player.reb,
+                    "ast": player.ast,
+                    "to": player.to,
+                    "stl": player.stl,
+                    "blk": player.blk,
+                    "pf": player.pf,
+                    "pts": player.pts,
+                    "rating": player.rating,
+                },
+            })
+
+        return {
+            "matchId": boxscore.match_id,
+            "retrieved": boxscore.retrieved_at.isoformat() if boxscore.retrieved_at else None,
+            "type": boxscore.match_type,
+            "neutral": boxscore.neutral,
+            "startTime": boxscore.start_time.isoformat() if boxscore.start_time else None,
+            "endTime": boxscore.end_time.isoformat() if boxscore.end_time else None,
+            "effortDelta": boxscore.effort_delta,
+            "attendance": {
+                "bleachers": boxscore.attendance_bleachers,
+                "lowerTier": boxscore.attendance_lower_tier,
+                "courtside": boxscore.attendance_courtside,
+                "luxury": boxscore.attendance_luxury,
+            },
+            "homeTeam": team_map["home"],
+            "awayTeam": team_map["away"],
+        }
+
+    def build_response_from_nt(boxscore: NTMatchBoxscore, teams: list[NTMatchTeamBoxscore], players: list[NTMatchPlayerBoxscore]):
+        team_map = {"home": None, "away": None}
+        for team in teams:
+            partials = [p for p in [team.partial_q1, team.partial_q2, team.partial_q3, team.partial_q4] if p is not None]
+            team_payload = {
+                "teamId": team.team_id,
+                "teamName": team.team_name,
+                "shortName": team.short_name,
+                "score": team.score,
+                "scorePartials": partials,
+                "offStrategy": team.off_strategy,
+                "defStrategy": team.def_strategy,
+                "effort": team.effort,
+                "ratings": {
+                    "outsideScoring": team.ratings_outside_scoring,
+                    "insideScoring": team.ratings_inside_scoring,
+                    "outsideDefense": team.ratings_outside_defense,
+                    "insideDefense": team.ratings_inside_defense,
+                    "rebounding": team.ratings_rebounding,
+                    "offensiveFlow": team.ratings_offensive_flow,
+                },
+                "efficiency": {
+                    "pg": team.efficiency_pg,
+                    "sg": team.efficiency_sg,
+                    "sf": team.efficiency_sf,
+                    "pf": team.efficiency_pf,
+                    "c": team.efficiency_c,
+                },
+                "gdp": {
+                    "focus": team.gdp_focus,
+                    "pace": team.gdp_pace,
+                    "focusHit": team.gdp_focus_hit,
+                    "paceHit": team.gdp_pace_hit,
+                },
+                "boxscore": {
+                    "players": [],
+                    "totals": {
+                        "fgm": team.totals_fgm,
+                        "fga": team.totals_fga,
+                        "tpm": team.totals_tpm,
+                        "tpa": team.totals_tpa,
+                        "ftm": team.totals_ftm,
+                        "fta": team.totals_fta,
+                        "oreb": team.totals_oreb,
+                        "reb": team.totals_reb,
+                        "ast": team.totals_ast,
+                        "to": team.totals_to,
+                        "stl": team.totals_stl,
+                        "blk": team.totals_blk,
+                        "pf": team.totals_pf,
+                        "pts": team.totals_pts,
+                    },
+                },
+            }
             key = "home" if team.is_home else "away"
             team_map[key] = team_payload
 
@@ -916,6 +1031,24 @@ async def get_schedule_match_detail(
         return build_response_from_details(details)
 
     if not boxscore or refresh or not team_rows:
+        if not refresh:
+            nt_boxscore = await db.get(NTMatchBoxscore, match_id)
+            if nt_boxscore:
+                nt_teams = (
+                    await db.execute(select(NTMatchTeamBoxscore).where(NTMatchTeamBoxscore.match_id == match_id))
+                ).scalars().all()
+                nt_players = (
+                    await db.execute(select(NTMatchPlayerBoxscore).where(NTMatchPlayerBoxscore.match_id == match_id))
+                ).scalars().all()
+                if nt_teams:
+                    return build_response_from_nt(nt_boxscore, nt_teams, nt_players)
+
+        if is_opponent_request:
+            raise HTTPException(status_code=404, detail="NT match details are not available in local cache")
+
+        if not user.bb_key:
+            raise HTTPException(status_code=400, detail="BB key not available")
+
         bb_client = BBApiClient(user.bb_key)
         details = await bb_client.get_boxscore(match_id, username=user.login_name, is_utopia=is_utopia)
         if details.get("error") == "NotAuthorised":
@@ -1069,6 +1202,7 @@ async def get_roster_for_week(
             "bestPosition": snapshot.best_position,
             "potential": snapshot.potential,
             "gameShape": snapshot.game_shape,
+            "playedNtMatch": snapshot.played_nt_match,
             "jumpShot": snapshot.jump_shot,
             "jumpRange": snapshot.jump_range,
             "outsideDefense": snapshot.outside_defense,
@@ -1172,6 +1306,15 @@ async def get_schedule(
             filters.append(ScheduleMatch.match_type == "bbm")
         if "friendly" in type_list:
             filters.append(ScheduleMatch.match_type == "friendly")
+        if "nt" in type_list:
+            filters.append(
+                and_(
+                    ScheduleMatch.match_type.like("nt%"),
+                    ScheduleMatch.match_type != "nt.friendly",
+                )
+            )
+        if "nt.friendly" in type_list:
+            filters.append(ScheduleMatch.match_type == "nt.friendly")
         return filters
 
     type_list = normalize_types(types)
@@ -1617,6 +1760,8 @@ async def get_opponent_overview(
     match_ids = [m.match_id for m in matches if m.match_id is not None]
     boxscore_effort_delta_by_match = {}
     boxscore_teams_by_match = {}
+    nt_boxscore_effort_delta_by_match = {}
+    nt_teams_by_match = {}
     if match_ids:
         try:
             boxscore_rows = (
@@ -1636,6 +1781,25 @@ async def get_opponent_overview(
                 boxscore_teams_by_match.setdefault(team_row.match_id, []).append(team_row)
         except SQLAlchemyError as e:
             print(f"WARN opponent overview: boxscore tables unavailable ({e}); using schedule-only data")
+
+        try:
+            nt_box_rows = (
+                await db.execute(
+                    select(NTMatchBoxscore).where(NTMatchBoxscore.match_id.in_(match_ids))
+                )
+            ).scalars().all()
+            for nt_box in nt_box_rows:
+                nt_boxscore_effort_delta_by_match[nt_box.match_id] = nt_box.effort_delta
+
+            nt_team_rows = (
+                await db.execute(
+                    select(NTMatchTeamBoxscore).where(NTMatchTeamBoxscore.match_id.in_(match_ids))
+                )
+            ).scalars().all()
+            for nt_team in nt_team_rows:
+                nt_teams_by_match.setdefault(nt_team.match_id, []).append(nt_team)
+        except SQLAlchemyError as e:
+            print(f"WARN opponent overview: nt boxscore tables unavailable ({e}); using schedule-only data")
 
     response_matches = []
     for match in matches:
@@ -1657,10 +1821,19 @@ async def get_opponent_overview(
         opponent_focus_hit = match.opponent_focus_hit
         opponent_pace_hit = match.opponent_pace_hit
         effort_delta = match.effort_delta if match.effort_delta is not None else boxscore_effort_delta_by_match.get(match_id)
+        if effort_delta is None:
+            effort_delta = nt_boxscore_effort_delta_by_match.get(match_id)
 
         boxscore_teams = boxscore_teams_by_match.get(match_id, [])
         my_team_box = next((team_row for team_row in boxscore_teams if team_row.team_id == team_id), None)
         opponent_team_box = next((team_row for team_row in boxscore_teams if team_row.team_id != team_id), None)
+
+        if not my_team_box or not opponent_team_box:
+            nt_rows = nt_teams_by_match.get(match_id, [])
+            if not my_team_box:
+                my_team_box = next((team_row for team_row in nt_rows if team_row.team_id == team_id), None)
+            if not opponent_team_box:
+                opponent_team_box = next((team_row for team_row in nt_rows if team_row.team_id != team_id), None)
 
         if my_team_box:
             my_off_strategy = my_team_box.off_strategy

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, Uuid, UniqueConstraint
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Uuid, UniqueConstraint
 from sqlalchemy.orm import relationship
 import uuid
 from app.database import Base
@@ -31,6 +31,7 @@ class PlayerSnapshot(Base):
     salary = Column(Integer, nullable=True)
     dmi = Column(Integer, nullable=True)
     best_position = Column(String(10), nullable=True)
+    played_nt_match = Column(Boolean, nullable=False, default=False)
 
     # Skills at time of snapshot
     jump_shot = Column(Integer, nullable=True)

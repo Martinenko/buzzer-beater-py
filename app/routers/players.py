@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, aliased
 from typing import List
 
 from app.database import get_db
@@ -9,6 +9,8 @@ from app.models.user import User
 from app.models.team import Team
 from app.models.player import Player
 from app.models.player_share import PlayerShare
+from app.models.match_boxscore import MatchBoxscore, MatchTeamBoxscore, MatchPlayerBoxscore
+from app.models.nt_match_boxscore import NTMatchBoxscore, NTMatchTeamBoxscore, NTMatchPlayerBoxscore
 from app.schemas.player import PlayerResponse, PlayerRosterResponse
 from app.dependencies import get_current_user, get_current_team_id
 from app.services.bb_api import BBApiClient
@@ -270,6 +272,215 @@ async def get_all_players(
         "page": page,
         "pageSize": page_size,
         "totalPages": total_pages
+    }
+
+
+@router.get("/{player_id}/matches")
+async def get_player_matches(
+    player_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get unified match history for a player (club + NT), sorted by date desc."""
+    _ = current_user
+
+    player_stmt = select(Player).where(Player.player_id == player_id)
+    player_result = await db.execute(player_stmt)
+    player = player_result.scalar_one_or_none()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    club_home = aliased(MatchTeamBoxscore)
+    club_away = aliased(MatchTeamBoxscore)
+    club_stmt = (
+        select(
+            MatchBoxscore.match_id,
+            MatchBoxscore.start_time,
+            MatchBoxscore.end_time,
+            MatchBoxscore.match_type,
+            MatchPlayerBoxscore.team_id.label("player_team_id"),
+            club_home.team_id.label("home_team_id"),
+            club_home.team_name.label("home_team_name"),
+            club_home.score.label("home_score"),
+            club_away.team_id.label("away_team_id"),
+            club_away.team_name.label("away_team_name"),
+            club_away.score.label("away_score"),
+            MatchPlayerBoxscore.is_starter,
+            MatchPlayerBoxscore.minutes_pg,
+            MatchPlayerBoxscore.minutes_sg,
+            MatchPlayerBoxscore.minutes_sf,
+            MatchPlayerBoxscore.minutes_pf,
+            MatchPlayerBoxscore.minutes_c,
+            MatchPlayerBoxscore.fgm,
+            MatchPlayerBoxscore.fga,
+            MatchPlayerBoxscore.tpm,
+            MatchPlayerBoxscore.tpa,
+            MatchPlayerBoxscore.ftm,
+            MatchPlayerBoxscore.fta,
+            MatchPlayerBoxscore.oreb,
+            MatchPlayerBoxscore.reb,
+            MatchPlayerBoxscore.ast,
+            MatchPlayerBoxscore.to,
+            MatchPlayerBoxscore.stl,
+            MatchPlayerBoxscore.blk,
+            MatchPlayerBoxscore.pf,
+            MatchPlayerBoxscore.pts,
+            MatchPlayerBoxscore.rating,
+        )
+        .join(MatchPlayerBoxscore, MatchPlayerBoxscore.match_id == MatchBoxscore.match_id)
+        .outerjoin(club_home, (club_home.match_id == MatchBoxscore.match_id) & (club_home.is_home == True))
+        .outerjoin(club_away, (club_away.match_id == MatchBoxscore.match_id) & (club_away.is_home == False))
+        .where(MatchPlayerBoxscore.player_id == player_id)
+    )
+    club_result = await db.execute(club_stmt)
+    club_rows = club_result.all()
+
+    nt_home = aliased(NTMatchTeamBoxscore)
+    nt_away = aliased(NTMatchTeamBoxscore)
+    nt_stmt = (
+        select(
+            NTMatchBoxscore.match_id,
+            NTMatchBoxscore.start_time,
+            NTMatchBoxscore.end_time,
+            NTMatchBoxscore.match_type,
+            NTMatchPlayerBoxscore.team_id.label("player_team_id"),
+            nt_home.team_id.label("home_team_id"),
+            nt_home.team_name.label("home_team_name"),
+            nt_home.score.label("home_score"),
+            nt_away.team_id.label("away_team_id"),
+            nt_away.team_name.label("away_team_name"),
+            nt_away.score.label("away_score"),
+            NTMatchPlayerBoxscore.is_starter,
+            NTMatchPlayerBoxscore.minutes_pg,
+            NTMatchPlayerBoxscore.minutes_sg,
+            NTMatchPlayerBoxscore.minutes_sf,
+            NTMatchPlayerBoxscore.minutes_pf,
+            NTMatchPlayerBoxscore.minutes_c,
+            NTMatchPlayerBoxscore.fgm,
+            NTMatchPlayerBoxscore.fga,
+            NTMatchPlayerBoxscore.tpm,
+            NTMatchPlayerBoxscore.tpa,
+            NTMatchPlayerBoxscore.ftm,
+            NTMatchPlayerBoxscore.fta,
+            NTMatchPlayerBoxscore.oreb,
+            NTMatchPlayerBoxscore.reb,
+            NTMatchPlayerBoxscore.ast,
+            NTMatchPlayerBoxscore.to,
+            NTMatchPlayerBoxscore.stl,
+            NTMatchPlayerBoxscore.blk,
+            NTMatchPlayerBoxscore.pf,
+            NTMatchPlayerBoxscore.pts,
+            NTMatchPlayerBoxscore.rating,
+        )
+        .join(NTMatchPlayerBoxscore, NTMatchPlayerBoxscore.match_id == NTMatchBoxscore.match_id)
+        .outerjoin(nt_home, (nt_home.match_id == NTMatchBoxscore.match_id) & (nt_home.is_home == True))
+        .outerjoin(nt_away, (nt_away.match_id == NTMatchBoxscore.match_id) & (nt_away.is_home == False))
+        .where(NTMatchPlayerBoxscore.player_id == player_id)
+    )
+    nt_result = await db.execute(nt_stmt)
+    nt_rows = nt_result.all()
+
+    matches = []
+
+    for row in club_rows:
+        matches.append({
+            "source": "club",
+            "matchId": row.match_id,
+            "type": row.match_type,
+            "startTime": row.start_time.isoformat() if row.start_time else None,
+            "endTime": row.end_time.isoformat() if row.end_time else None,
+            "playerTeamId": row.player_team_id,
+            "homeTeam": {
+                "teamId": row.home_team_id,
+                "teamName": row.home_team_name,
+                "score": row.home_score,
+            },
+            "awayTeam": {
+                "teamId": row.away_team_id,
+                "teamName": row.away_team_name,
+                "score": row.away_score,
+            },
+            "stats": {
+                "isStarter": row.is_starter,
+                "minutes": {
+                    "pg": row.minutes_pg,
+                    "sg": row.minutes_sg,
+                    "sf": row.minutes_sf,
+                    "pf": row.minutes_pf,
+                    "c": row.minutes_c,
+                },
+                "fgm": row.fgm,
+                "fga": row.fga,
+                "tpm": row.tpm,
+                "tpa": row.tpa,
+                "ftm": row.ftm,
+                "fta": row.fta,
+                "oreb": row.oreb,
+                "reb": row.reb,
+                "ast": row.ast,
+                "to": row.to,
+                "stl": row.stl,
+                "blk": row.blk,
+                "pf": row.pf,
+                "pts": row.pts,
+                "rating": row.rating,
+            },
+        })
+
+    for row in nt_rows:
+        matches.append({
+            "source": "nt",
+            "matchId": row.match_id,
+            "type": row.match_type,
+            "startTime": row.start_time.isoformat() if row.start_time else None,
+            "endTime": row.end_time.isoformat() if row.end_time else None,
+            "playerTeamId": row.player_team_id,
+            "homeTeam": {
+                "teamId": row.home_team_id,
+                "teamName": row.home_team_name,
+                "score": row.home_score,
+            },
+            "awayTeam": {
+                "teamId": row.away_team_id,
+                "teamName": row.away_team_name,
+                "score": row.away_score,
+            },
+            "stats": {
+                "isStarter": row.is_starter,
+                "minutes": {
+                    "pg": row.minutes_pg,
+                    "sg": row.minutes_sg,
+                    "sf": row.minutes_sf,
+                    "pf": row.minutes_pf,
+                    "c": row.minutes_c,
+                },
+                "fgm": row.fgm,
+                "fga": row.fga,
+                "tpm": row.tpm,
+                "tpa": row.tpa,
+                "ftm": row.ftm,
+                "fta": row.fta,
+                "oreb": row.oreb,
+                "reb": row.reb,
+                "ast": row.ast,
+                "to": row.to,
+                "stl": row.stl,
+                "blk": row.blk,
+                "pf": row.pf,
+                "pts": row.pts,
+                "rating": row.rating,
+            },
+        })
+
+    matches.sort(
+        key=lambda m: m["startTime"] if m["startTime"] else "0000-00-00T00:00:00",
+        reverse=True,
+    )
+
+    return {
+        "playerId": player_id,
+        "playerName": player.name,
+        "matches": matches,
     }
 
 
